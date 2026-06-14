@@ -1,7 +1,9 @@
 from pydantic import BaseModel
 
 from app.application.commands.ingest_assets import IngestAssetsCommand
-from app.application.services.asset_ingestion_service import AssetIngestionService
+from app.application.services.asset_ingestion_service import (
+    AbstractAssetIngestionService,
+)
 from app.application.services.covenant_state_service import (
     initial_state,
     update_covenant_state,
@@ -42,7 +44,7 @@ class IngestAssetsUseCase:
 
     def __init__(
         self,
-        ingestion_service: AssetIngestionService,
+        ingestion_service: AbstractAssetIngestionService,
         state_repository: FacilityCovenantStateRepository,
     ) -> None:
         self._ingestion_service = ingestion_service

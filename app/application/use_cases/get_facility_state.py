@@ -1,19 +1,18 @@
-from dataclasses import dataclass
+from pydantic import BaseModel
 
+from app.application.queries.get_facility_state import GetFacilityStateQuery
 from app.application.services.covenant_state_service import initial_state
 from app.domain.asset.repository import AssetRepository
 from app.domain.covenant.state import FacilityCovenantState
 from app.domain.covenant.state_repository import FacilityCovenantStateRepository
 
 
-@dataclass
-class ExcludedAssetInfo:
+class ExcludedAssetInfo(BaseModel):
     external_id: str
     reasons: list[str]
 
 
-@dataclass
-class FacilityStateResult:
+class FacilityStateResult(BaseModel):
     covenant_state: FacilityCovenantState
     included_assets: list[str]
     excluded_assets: list[ExcludedAssetInfo]
@@ -25,9 +24,16 @@ class FacilityStateResult:
 
 class GetFacilityStateUseCase:
     """
-    Read-only query: returns the pre-computed covenant state for a facility
-    together with the list of included and excluded assets derived from the
-    ingested asset records. Never writes to the database.
+    Business context: Returns a facility's current pre-computed covenant state
+    and a breakdown of its ingested assets by eligibility, without triggering
+    any recalculation or locking.
+
+    Assumptions:
+    - If no covenant state has been persisted yet, a synthetic NO_DATA state is
+      returned so callers always receive a well-formed response.
+    - Asset eligibility is pre-computed at ingestion time (is_eligible_asset flag);
+      this use case only reads and projects that stored result.
+    - This operation is fully read-only — no writes, no row locks.
     """
 
     def __init__(
@@ -38,9 +44,11 @@ class GetFacilityStateUseCase:
         self._state_repository = state_repository
         self._asset_repository = asset_repository
 
-    def execute(self, facility_id: str) -> FacilityStateResult:
-        state = self._state_repository.get(facility_id) or initial_state(facility_id)
-        assets = self._asset_repository.find_by_facility(facility_id)
+    def execute(self, query: GetFacilityStateQuery) -> FacilityStateResult:
+        state = self._state_repository.get(query.facility_id) or initial_state(
+            query.facility_id
+        )
+        assets = self._asset_repository.find_by_facility(query.facility_id)
 
         included = [a.external_id for a in assets if a.is_eligible_asset]
         excluded = [

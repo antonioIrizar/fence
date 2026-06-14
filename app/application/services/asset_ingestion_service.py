@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
@@ -28,6 +29,16 @@ class AssetIngestionBatch(BaseModel):
     facility_threshold: Decimal
 
 
+class AbstractAssetIngestionService(ABC):
+    """Interface for the asset ingestion pipeline. Inputs: facility_id, raw asset dicts.
+    Outputs: AssetIngestionBatch with saved/duplicate ids and eligible contributions."""
+
+    @abstractmethod
+    def ingest(
+        self, facility_id: str, raw_assets: list[dict[str, Any]]
+    ) -> AssetIngestionBatch: ...
+
+
 def _build_record(
     facility_id: str,
     raw: dict[str, Any],
@@ -49,7 +60,7 @@ def _build_record(
     )
 
 
-class AssetIngestionService:
+class AssetIngestionService(AbstractAssetIngestionService):
     """
     Application service responsible for processing, deduplicating, and
     persisting a batch of raw assets for a facility.

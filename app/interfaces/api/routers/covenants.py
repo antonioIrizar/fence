@@ -11,6 +11,7 @@ from app.application.use_cases.get_covenant_report import (
     GetCovenantReportUseCase,
     ListCovenantReportsUseCase,
 )
+from app.application.queries.get_facility_state import GetFacilityStateQuery
 from app.application.use_cases.get_facility_state import GetFacilityStateUseCase
 from app.application.use_cases.ingest_assets import IngestAssetsUseCase
 from app.domain.covenant.entities import CovenantReport
@@ -114,7 +115,7 @@ def get_facility_state(
     facility_id: str,
     use_case: GetFacilityStateUseCase = Depends(get_facility_state_use_case),
 ) -> FacilityStateResponse:
-    result = use_case.execute(facility_id)
+    result = use_case.execute(GetFacilityStateQuery(facility_id=facility_id))
     return FacilityStateResponse(
         covenant_state=CovenantStateResponse.from_domain(result.covenant_state),
         summary=FacilityStateSummary(
