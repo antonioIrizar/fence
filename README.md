@@ -212,33 +212,10 @@ Coverage targets:
 
 ---
 
-## Trade-offs and Decisions
+## IA transcript
 
-| Decision | Choice | Rationale |
-|---|---|---|
-| Arithmetic | `Decimal` | Deterministic, auditable; `float` is a bug |
-| DB sync driver | `psycopg2` (sync) | Simpler for a challenge; swap to `asyncpg` + SQLAlchemy async for production throughput |
-| Report storage | Append-only rows | Covenant immutability; no soft-deletes |
-| Asset storage | JSON columns | Schema differs per facility; avoids EAV complexity |
-| Smart contract | Stub | Correct abstraction in place; web3 integration is a one-file change |
-| Status normalisation | `.lower()` comparison | Originators send inconsistent casing (open/OPEN/Open) |
+I used Claude Code with Sonnet 4.6 effort Hight.
 
----
+The file [prompts.md](prompts.md) contains all the prompts I used.
 
-## Path to Production
-
-1. **Async database**: replace `psycopg2` + sync SQLAlchemy with `asyncpg` + `sqlalchemy[asyncio]`; use `async def` routes
-2. **Smart contract publishing**: implement `SmartContractPublisher.publish()` with `web3.py`, encode ABI calldata, submit signed transaction, store `tx_hash`
-3. **Structured logging**: wire `structlog` with the required `facility_id / covenant_id / report_id / correlation_id` fields
-4. **Auth**: add JWT middleware at the API boundary
-5. **Event sourcing**: replace direct DB writes with domain events for a full audit trail
-6. **Alembic migrations**: already wired; run `alembic upgrade head` on deploy (done automatically in `docker compose up`)
-
----
-
-## Assumptions
-
-- Status field comparisons are case-insensitive (originators send `"open"`, `"Open"`, `"OPEN"`)
-- `repayment_months` for Nomina uses a floor of 1 when origination and maturity fall in the same calendar month
-- The `amount` field present in all originator payloads maps to the `BaseAsset.amount` field (original disbursement basis); facility-specific outstanding amounts drive calculations
-- A calculation with zero eligible assets raises an error rather than publishing a zero-rate report, since a zero result would be meaningless and potentially misleading as a covenant
+the file [full_transcript_calude_code.md](full_transcript_calude_code.md) contains the full transcript obtained from the project.
