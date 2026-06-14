@@ -7,6 +7,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     DateTime,
+    Index,
     Integer,
     Numeric,
     String,
@@ -38,6 +39,7 @@ class AssetModel(Base):
         UniqueConstraint(
             "facility_id", "external_id", name="uq_asset_facility_external"
         ),
+        Index("ix_assets_facility_ingested", "facility_id", "ingested_at"),
     )
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
@@ -93,9 +95,12 @@ class CovenantReportModel(Base):
     """
 
     __tablename__ = "covenant_reports"
+    __table_args__ = (
+        Index("ix_covenant_reports_facility_computed", "facility_id", "computed_at"),
+    )
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True)
-    facility_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    facility_id: Mapped[str] = mapped_column(String, nullable=False)
     effective_rate: Mapped[str] = mapped_column(Numeric(20, 10), nullable=False)
     threshold: Mapped[str] = mapped_column(Numeric(20, 10), nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False)

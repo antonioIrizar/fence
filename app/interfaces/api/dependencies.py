@@ -58,9 +58,7 @@ def get_repository(
     return PostgresCovenantReportRepository(session)
 
 
-def get_publisher(
-    repository: CovenantReportRepository = Depends(get_repository),
-) -> Publisher:
+def get_publisher() -> Publisher:
     if settings.publisher_backend == "smart_contract":
         return SmartContractPublisher()
     return DatabasePublisher()

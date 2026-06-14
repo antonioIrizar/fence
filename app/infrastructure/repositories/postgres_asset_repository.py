@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -103,7 +102,3 @@ def _to_domain(model: AssetModel) -> AssetRecord:
         raw=model.raw,
         ingested_at=ingested_at,
     )
-
-
-def _nullable_decimal(value: Optional[Decimal]) -> Optional[Decimal]:
-    return value

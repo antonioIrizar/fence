@@ -137,6 +137,20 @@ def test_unknown_facility_raises() -> None:
         service.ingest("unknown", [_raw("A1")])
 
 
+def test_all_records_in_batch_share_same_ingested_at() -> None:
+    """Every record produced from one ingest() call must carry the same
+    ingested_at timestamp so that the audit hash is deterministic regardless
+    of how long the per-asset processing loop takes."""
+    service, repo, _ = _make_service(
+        process_side_effects=[_eligible("A1"), _eligible("A2")]
+    )
+    service.ingest("facility-a", [_raw("A1"), _raw("A2")])
+
+    saved = repo.save_batch.call_args[0][0]
+    assert len(saved) == 2
+    assert saved[0].ingested_at == saved[1].ingested_at
+
+
 def test_malformed_asset_propagates_error() -> None:
     repo = MagicMock()
     calculator = MagicMock()

@@ -3,11 +3,14 @@ from decimal import Decimal
 from unittest.mock import MagicMock
 from uuid import uuid4
 
+import pytest
+
 from app.application.services.covenant_state_service import (
     initial_state,
     update_covenant_state,
 )
 from app.domain.covenant.state import CovenantStateStatus, FacilityCovenantState
+from app.domain.errors import CovenantCalculationError
 
 
 def _existing_state(
@@ -99,7 +102,7 @@ def test_empty_contributions_preserves_state() -> None:
         status=CovenantStateStatus.COMPLIANT,
     )
     repo = MagicMock()
-    repo.get_for_update.return_value = existing
+    repo.get.return_value = existing
 
     state = update_covenant_state(
         repository=repo,
@@ -108,16 +111,31 @@ def test_empty_contributions_preserves_state() -> None:
         threshold=Decimal("22.00"),
     )
 
-    # No contributions → state unchanged
     assert state.accumulated_numerator == Decimal("100000")
     assert state.accumulated_denominator == Decimal("5000")
     assert state.covenant_status == CovenantStateStatus.COMPLIANT
-    repo.upsert.assert_called_once()
+    repo.upsert.assert_not_called()
+    repo.get_for_update.assert_not_called()
 
 
-def test_lock_is_always_acquired() -> None:
+def test_lock_acquired_only_when_contributions_exist() -> None:
     repo = MagicMock()
     repo.get_for_update.return_value = None
+
+    update_covenant_state(
+        repository=repo,
+        facility_id="facility-a",
+        contributions=[(Decimal("190000"), Decimal("9500"))],
+        threshold=Decimal("22.00"),
+    )
+
+    repo.get_for_update.assert_called_once_with("facility-a")
+    repo.get.assert_not_called()
+
+
+def test_no_lock_when_no_contributions() -> None:
+    repo = MagicMock()
+    repo.get.return_value = None
 
     update_covenant_state(
         repository=repo,
@@ -126,7 +144,23 @@ def test_lock_is_always_acquired() -> None:
         threshold=Decimal("22.00"),
     )
 
-    repo.get_for_update.assert_called_once_with("facility-a")
+    repo.get_for_update.assert_not_called()
+    repo.upsert.assert_not_called()
+
+
+def test_zero_denominator_raises_calculation_error() -> None:
+    """A zero denominator (all eligible assets have zero outstanding amount)
+    must raise CovenantCalculationError, not a ZeroDivisionError."""
+    repo = MagicMock()
+    repo.get_for_update.return_value = None
+
+    with pytest.raises(CovenantCalculationError, match="zero"):
+        update_covenant_state(
+            repository=repo,
+            facility_id="facility-a",
+            contributions=[(Decimal("5"), Decimal("0"))],
+            threshold=Decimal("22.00"),
+        )
 
 
 def test_multiple_contributions_summed() -> None:

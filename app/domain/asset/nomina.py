@@ -10,7 +10,6 @@ class NominaAsset(BaseAsset):
     status: str
     outstanding_amount: Decimal
     fee_percentage: Decimal
-    fee_amount: Decimal
     origination_date: date
     maturity_date: str  # DD/MM/YYYY format as provided by originator
     net_monthly_salary: Decimal

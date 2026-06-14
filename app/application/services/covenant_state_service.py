@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from app.domain.covenant.state import CovenantStateStatus, FacilityCovenantState
 from app.domain.covenant.state_repository import FacilityCovenantStateRepository
+from app.domain.errors import CovenantCalculationError
 
 _TWO_PLACES = Decimal("0.01")
 
@@ -35,6 +36,11 @@ def _recompute(
     """
     new_numerator = state.accumulated_numerator + delta_numerator
     new_denominator = state.accumulated_denominator + delta_denominator
+    if new_denominator == Decimal("0"):
+        raise CovenantCalculationError(
+            f"Covenant denominator is zero for facility '{state.facility_id}' — "
+            "all eligible assets have a zero outstanding amount."
+        )
     effective_rate = (new_numerator / new_denominator).quantize(
         _TWO_PLACES, rounding=ROUND_HALF_UP
     )
@@ -61,21 +67,24 @@ def update_covenant_state(
     threshold: Decimal,
 ) -> FacilityCovenantState:
     """
-    Acquire a row-level lock on the facility covenant state, accumulate new
-    asset contributions, persist the result, and return the updated state.
+    Accumulate new asset contributions into the facility covenant state.
+
+    When contributions is non-empty: acquires a SELECT FOR UPDATE lock to
+    prevent concurrent ingest tasks from producing incorrect accumulated
+    totals, recomputes the state, and persists it.
+
+    When contributions is empty: reads without a lock and skips the write,
+    returning the existing state (or a zero-valued initial state) unchanged.
 
     A contribution is a (numerator, denominator) pair pre-computed by the
     FacilityCalculator for one eligible asset.
-
-    The lock (SELECT FOR UPDATE in PostgreSQL) prevents concurrent ingestion
-    tasks from producing incorrect accumulated totals.
     """
+    if not contributions:
+        return repository.get(facility_id) or initial_state(facility_id)
+
     state = repository.get_for_update(facility_id) or initial_state(facility_id)
-
-    if contributions:
-        delta_num = sum((n for n, _ in contributions), Decimal("0"))
-        delta_den = sum((d for _, d in contributions), Decimal("0"))
-        state = _recompute(state, delta_num, delta_den, threshold)
-
+    delta_num = sum((n for n, _ in contributions), Decimal("0"))
+    delta_den = sum((d for _, d in contributions), Decimal("0"))
+    state = _recompute(state, delta_num, delta_den, threshold)
     repository.upsert(state)
     return state

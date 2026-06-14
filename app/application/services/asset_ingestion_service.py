@@ -43,6 +43,7 @@ def _build_record(
     facility_id: str,
     raw: dict[str, Any],
     result: AssetProcessingResult,
+    ingested_at: datetime,
 ) -> AssetRecord:
     return AssetRecord(
         id=uuid4(),
@@ -52,7 +53,7 @@ def _build_record(
         is_eligible=result.asset.is_eligible,
         status=str(raw.get("status", "")),
         raw=raw,
-        ingested_at=datetime.now(timezone.utc),
+        ingested_at=ingested_at,
         is_eligible_asset=result.is_eligible,
         exclusion_reasons=result.exclusion_reasons,
         contribution_numerator=result.numerator,
@@ -101,7 +102,10 @@ class AssetIngestionService(AbstractAssetIngestionService):
             r.asset.external_id for _, r in processed if r.asset.external_id in existing
         ]
 
-        new_records = [_build_record(facility_id, raw, r) for raw, r in new_pairs]
+        batch_ts = datetime.now(timezone.utc)
+        new_records = [
+            _build_record(facility_id, raw, r, batch_ts) for raw, r in new_pairs
+        ]
         if new_records:
             self._asset_repository.save_batch(new_records)
 

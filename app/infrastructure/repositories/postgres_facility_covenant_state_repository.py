@@ -2,10 +2,12 @@ from datetime import timezone
 from decimal import Decimal
 from typing import Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.domain.covenant.state import CovenantStateStatus, FacilityCovenantState
 from app.domain.covenant.state_repository import FacilityCovenantStateRepository
+from app.domain.errors import CovenantPublicationError
 from app.infrastructure.database.models import FacilityCovenantStateModel
 
 
@@ -53,18 +55,27 @@ class PostgresFacilityCovenantStateRepository(FacilityCovenantStateRepository):
             existing.covenant_status = state.covenant_status.value
             existing.last_updated = state.last_updated
         else:
-            self._session.add(
-                FacilityCovenantStateModel(
-                    id=state.id,
-                    facility_id=state.facility_id,
-                    accumulated_numerator=state.accumulated_numerator,
-                    accumulated_denominator=state.accumulated_denominator,
-                    effective_rate=state.effective_rate,
-                    covenant_status=state.covenant_status.value,
-                    last_updated=state.last_updated,
+            # Use a SAVEPOINT so that an IntegrityError from a concurrent
+            # first-insert doesn't invalidate the outer transaction.
+            try:
+                with self._session.begin_nested():
+                    self._session.add(
+                        FacilityCovenantStateModel(
+                            id=state.id,
+                            facility_id=state.facility_id,
+                            accumulated_numerator=state.accumulated_numerator,
+                            accumulated_denominator=state.accumulated_denominator,
+                            effective_rate=state.effective_rate,
+                            covenant_status=state.covenant_status.value,
+                            last_updated=state.last_updated,
+                        )
+                    )
+                    self._session.flush()
+            except IntegrityError:
+                raise CovenantPublicationError(
+                    f"Concurrent first ingestion for facility '{state.facility_id}'. "
+                    "Retry the request."
                 )
-            )
-        self._session.flush()
 
 
 def _to_domain(model: FacilityCovenantStateModel) -> FacilityCovenantState:

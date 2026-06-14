@@ -80,7 +80,6 @@ class NominaMapper(FacilityMapper):
                 status=str(raw["status"]),
                 outstanding_amount=Decimal(str(raw["outstanding_amount"])),
                 fee_percentage=Decimal(str(raw["fee_percentage"])),
-                fee_amount=Decimal(str(raw["fee_amount"])),
                 origination_date=raw["origination_date"],
                 maturity_date=str(raw["maturity_date"]),
                 net_monthly_salary=Decimal(str(raw["net_monthly_salary"])),

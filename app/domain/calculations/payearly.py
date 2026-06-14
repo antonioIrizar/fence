@@ -71,7 +71,6 @@ class PayEarlyMapper(FacilityMapper):
                 total_principal_amount=Decimal(str(raw["total_principal_amount"])),
                 repaid_principal_amount=Decimal(str(raw["repaid_principal_amount"])),
                 total_fee_amount=Decimal(str(raw["total_fee_amount"])),
-                outstanding_fee_amount=Decimal(str(raw["outstanding_fee_amount"])),
                 created_at=raw["created_at"],
                 due_date=raw["due_date"],
                 days_past_due=int(raw["days_past_due"]),
