@@ -29,6 +29,7 @@ def _asset(
     reasons: list[str] | None = None,
     numerator: str | None = "20000",
     denominator: str | None = "1000",
+    raw: dict | None = None,
 ) -> AssetRecord:
     return AssetRecord(
         id=uuid4(),
@@ -41,7 +42,7 @@ def _asset(
         exclusion_reasons=reasons or [],
         contribution_numerator=Decimal(numerator) if numerator else None,
         contribution_denominator=Decimal(denominator) if denominator else None,
-        raw={},
+        raw=raw if raw is not None else {},
         ingested_at=datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc),
     )
 
@@ -132,6 +133,18 @@ def test_exclusion_reason_order_does_not_affect_hash() -> None:
     h1 = compute_asset_hash("facility-a", [a1], state)
     h2 = compute_asset_hash("facility-a", [a2], state)
     assert h1 == h2
+
+
+def test_changed_raw_source_field_produces_different_hash() -> None:
+    """Changing a raw source field (e.g. outstanding_amount) must invalidate
+    the hash even when the derived contribution_numerator / denominator are
+    left unchanged — otherwise a tampered payload verifies as is_valid=True."""
+    state = _state()
+    original = _asset("A1", raw={"outstanding_amount": "5000", "interest_rate": "20"})
+    tampered = _asset("A1", raw={"outstanding_amount": "50000", "interest_rate": "20"})
+    h1 = compute_asset_hash("facility-a", [original], state)
+    h2 = compute_asset_hash("facility-a", [tampered], state)
+    assert h1 != h2
 
 
 def test_empty_assets_produces_stable_hash() -> None:

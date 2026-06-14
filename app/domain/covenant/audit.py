@@ -54,6 +54,7 @@ def compute_asset_hash(
                     else None
                 ),
                 "ingested_at": a.ingested_at.isoformat(),
+                "raw": a.raw,
             }
             for a in sorted_assets
         ],
