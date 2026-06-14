@@ -51,7 +51,7 @@ class CreateFacilityReportUseCase:
         self._publisher = publisher
 
     def execute(self, command: CreateFacilityReportCommand) -> CovenantReport:
-        state = self._state_repository.get(command.facility_id)
+        state = self._state_repository.get_for_update(command.facility_id)
         if state is None or state.covenant_status == CovenantStateStatus.NO_DATA:
             raise CovenantCalculationError(
                 f"No asset data available for facility '{command.facility_id}'. "

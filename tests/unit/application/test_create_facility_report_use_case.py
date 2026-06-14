@@ -72,7 +72,7 @@ def _make_use_case(
     latest_report: CovenantReport | None = None,
 ) -> CreateFacilityReportUseCase:
     state_repo = MagicMock()
-    state_repo.get.return_value = state
+    state_repo.get_for_update.return_value = state
 
     asset_repo = MagicMock()
     asset_repo.find_by_facility.return_value = assets or [_asset("A1")]
@@ -102,6 +102,25 @@ def _cmd(force_new: bool = False) -> CreateFacilityReportCommand:
         correlation_id="corr-1",
         force_new=force_new,
     )
+
+
+# ── locking read ─────────────────────────────────────────────────────────────
+
+
+def test_state_is_read_with_lock() -> None:
+    """Report creation must hold a FOR UPDATE lock on the covenant state so that
+    a concurrent ingest cannot commit between the state read and the asset fetch,
+    which would produce a sealed report with an effective_rate that doesn't
+    account for all listed assets."""
+    use_case = _make_use_case(state=_state())
+    with patch(
+        "app.application.use_cases.create_facility_report.compute_asset_hash",
+        return_value=_HASH,
+    ):
+        use_case.execute(_cmd())
+
+    use_case._state_repository.get_for_update.assert_called_once_with("facility-a")
+    use_case._state_repository.get.assert_not_called()
 
 
 # ── NO_DATA guard ─────────────────────────────────────────────────────────────
