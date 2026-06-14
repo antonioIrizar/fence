@@ -159,3 +159,11 @@ docker compose run api pytest
 ```
 
 ---
+
+## IA transcript
+
+I used Claude Code with Sonnet 4.6 effort Hight.
+
+The file [prompts.md](prompts.md) contains all the prompts I used.
+
+the file [full_transcript_calude_code.md](full_transcript_calude_code.md) contains the full transcript obtained from the project.
