@@ -1,4 +1,4 @@
-from datetime import timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -57,6 +57,17 @@ class PostgresAssetRepository(AssetRepository):
         rows = (
             self._session.query(AssetModel)
             .filter(AssetModel.facility_id == facility_id)
+            .all()
+        )
+        return [_to_domain(row) for row in rows]
+
+    def find_by_facility_at(self, facility_id: str, at: datetime) -> list[AssetRecord]:
+        rows = (
+            self._session.query(AssetModel)
+            .filter(
+                AssetModel.facility_id == facility_id,
+                AssetModel.ingested_at <= at,
+            )
             .all()
         )
         return [_to_domain(row) for row in rows]

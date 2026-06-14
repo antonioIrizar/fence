@@ -39,6 +39,8 @@ class TestNominaRepaymentMonthsGuard:
 
     def test_same_month_gives_minimum_one(self) -> None:
         """origination and maturity in same calendar month → 1 month floor."""
+        from decimal import Decimal
+
         from app.domain.calculations.nomina import NominaCalculator
 
         calc = NominaCalculator()
@@ -50,7 +52,7 @@ class TestNominaRepaymentMonthsGuard:
             "fee_percentage": 2.0,
             "fee_amount": 20.0,
             "origination_date": "2024-06-15",
-            "maturity_date": "30/06/2024",  # same month
+            "maturity_date": "30/06/2024",  # same month → floor to 1
             "net_monthly_salary": 3000.0,
             "advance_amount": 1000.0,
             "repaid_amount": 0.0,
@@ -59,11 +61,10 @@ class TestNominaRepaymentMonthsGuard:
             "employer_tax_id": "ESA123",
             "amount": 1000.0,
         }
-        report = calc.calculate([raw], "facility-c", "corr-floor")
-        # annualized_fee = 2.0 * (12/1) = 24.0
-        from decimal import Decimal
-
-        assert report.effective_rate == Decimal("24.00")
+        result = calc.process_asset(raw)
+        # annualized_fee = 2.0 * (12/1) = 24.0 → numerator = 1000 * 24 = 24000
+        assert result.is_eligible is True
+        assert result.numerator == Decimal("24000")
 
 
 class TestMapperGeneralException:

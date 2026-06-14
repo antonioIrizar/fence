@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from datetime import datetime
 
 from app.domain.asset.record import AssetRecord
 
@@ -23,3 +24,7 @@ class AssetRepository(ABC):
     @abstractmethod
     def find_by_facility(self, facility_id: str) -> list[AssetRecord]:
         """Return all asset records for a facility."""
+
+    @abstractmethod
+    def find_by_facility_at(self, facility_id: str, at: datetime) -> list[AssetRecord]:
+        """Return asset records ingested on or before `at` (point-in-time snapshot)."""

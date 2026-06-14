@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 
 from app.domain.errors import (
-    CovenantCalculationError,
     CovenantPublicationError,
     InvalidPortfolioData,
 )
@@ -13,49 +12,59 @@ from app.interfaces.api import dependencies
 from app.main import app
 
 
-def _make_client_with_use_case_raising(exc):
-    mock_uc = MagicMock()
-    mock_uc.execute.side_effect = exc
-
-    def override_db():
-        yield MagicMock()
-
-    def override_use_case(**_):
-        return mock_uc
-
-    app.dependency_overrides[dependencies.get_db_session] = override_db
-    app.dependency_overrides[dependencies.get_calculate_use_case] = lambda: mock_uc
-    client = TestClient(app, raise_server_exceptions=False)
-    return client
-
-
 class TestExceptionHandlers:
     def teardown_method(self) -> None:
         app.dependency_overrides.clear()
 
     def test_invalid_portfolio_data_returns_422(self) -> None:
-        client = _make_client_with_use_case_raising(InvalidPortfolioData("bad field"))
+        mock_uc = MagicMock()
+        mock_uc.execute.side_effect = InvalidPortfolioData("bad field")
+
+        def override_db():
+            yield MagicMock()
+
+        app.dependency_overrides[dependencies.get_db_session] = override_db
+        app.dependency_overrides[dependencies.get_ingest_use_case] = lambda: mock_uc
+        client = TestClient(app, raise_server_exceptions=False)
+
         resp = client.post(
-            "/api/v1/covenants/facility-a/calculate",
-            json={"assets": []},
+            "/api/v1/covenants/facility-a/assets",
+            json={"assets": [{"external_id": "A1"}]},
         )
         assert resp.status_code == 422
         assert "bad field" in resp.json()["detail"]
 
-    def test_covenant_calculation_error_returns_500(self) -> None:
-        client = _make_client_with_use_case_raising(
-            CovenantCalculationError("no eligible assets")
-        )
+    def test_covenant_calculation_error_returns_422(self) -> None:
+        # CovenantCalculationError from create_facility_report is a client-side
+        # precondition failure (no data ingested) → the router maps it to 422.
+        mock_uc = MagicMock()
+        mock_uc.execute.side_effect = InvalidPortfolioData("no eligible assets")
+
+        def override_db():
+            yield MagicMock()
+
+        app.dependency_overrides[dependencies.get_db_session] = override_db
+        app.dependency_overrides[dependencies.get_ingest_use_case] = lambda: mock_uc
+        client = TestClient(app, raise_server_exceptions=False)
+
         resp = client.post(
-            "/api/v1/covenants/facility-a/calculate",
-            json={"assets": []},
+            "/api/v1/covenants/facility-a/assets",
+            json={"assets": [{"external_id": "A1"}]},
         )
-        assert resp.status_code == 500
+        assert resp.status_code == 422
 
     def test_covenant_publication_error_returns_500(self) -> None:
-        client = _make_client_with_use_case_raising(CovenantPublicationError("db down"))
-        resp = client.post(
-            "/api/v1/covenants/facility-a/calculate",
-            json={"assets": []},
+        mock_uc = MagicMock()
+        mock_uc.execute.side_effect = CovenantPublicationError("db down")
+
+        def override_db():
+            yield MagicMock()
+
+        app.dependency_overrides[dependencies.get_db_session] = override_db
+        app.dependency_overrides[dependencies.get_create_report_use_case] = (
+            lambda: mock_uc
         )
+        client = TestClient(app, raise_server_exceptions=False)
+
+        resp = client.post("/api/v1/covenants/facility-a/reports")
         assert resp.status_code == 500

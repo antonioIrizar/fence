@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.application.registry import FacilityRegistry
+from app.domain.asset.record import AssetRecord
 from app.domain.calculations.educa import EducaCalculator
 from app.domain.calculations.nomina import NominaCalculator
 from app.domain.calculations.payearly import PayEarlyCalculator
@@ -21,6 +23,18 @@ from app.infrastructure.repositories.postgres_covenant_report_repository import 
 )
 from app.main import app
 from app.interfaces.api import dependencies
+
+
+class _SQLiteAssetRepository(PostgresAssetRepository):
+    """Strips UTC timezone before comparison because SQLite stores datetimes
+    as naive UTC strings — a workaround that must not exist in production code."""
+
+    def find_by_facility_at(
+        self, facility_id: str, at: datetime
+    ) -> list[AssetRecord]:
+        at_naive = at.replace(tzinfo=None) if at.tzinfo is not None else at
+        return super().find_by_facility_at(facility_id, at_naive)
+
 
 TEST_DB_URL = "sqlite:///./test.db"
 
@@ -73,7 +87,7 @@ def publisher(repository):
 
 @pytest.fixture
 def asset_repository(db_session):
-    return PostgresAssetRepository(db_session)
+    return _SQLiteAssetRepository(db_session)
 
 
 @pytest.fixture

@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 from uuid import UUID
 
+
 from app.domain.covenant.entities import CovenantReport
 
 
@@ -19,3 +20,6 @@ class CovenantReportRepository(ABC):
 
     @abstractmethod
     def find_by_facility(self, facility_id: str) -> list[CovenantReport]: ...
+
+    @abstractmethod
+    def find_latest_by_facility(self, facility_id: str) -> Optional[CovenantReport]: ...

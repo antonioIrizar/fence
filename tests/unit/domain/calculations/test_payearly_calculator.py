@@ -7,8 +7,7 @@ from app.domain.calculations.payearly import (
     PayEarlyEligibilityPolicy,
     PayEarlyMapper,
 )
-from app.domain.covenant.entities import CovenantStatus
-from app.domain.errors import CovenantCalculationError, InvalidPortfolioData
+from app.domain.errors import InvalidPortfolioData
 
 
 class TestPayEarlyEligibilityPolicy:
@@ -145,104 +144,37 @@ class TestPayEarlyCalculator:
             "amount": float(total_principal),
         }
 
-    def test_fee_yield_calculation(self) -> None:
-        # Asset: total_principal=8500, fee=1.75, created=2025-06-15, due=2026-03-15
-        # tenor_days = 273 days
-        # fee_yield = (1.75/8500) * (365/273) = 0.00020588 * 1.33699 ≈ 0.00027531
-        # fee_yield_pct = 0.027531% → rounds to 0.03%
-        raw_assets = [
-            self._make_raw(
-                "PE-001",
-                "3400",
-                "8500",
-                "1.75",
-                "2025-06-15T09:00:00+00:00",
-                "2026-03-15",
-            )
-        ]
-        report = self.calc.calculate(raw_assets, "facility-b", "corr-001")
-        assert report.effective_rate == Decimal("0.03")
-        assert report.status == CovenantStatus.COMPLIANT
+    def test_threshold_property(self) -> None:
+        assert self.calc.threshold == Decimal("3.00")
 
-    def test_compliant_below_threshold(self) -> None:
-        raw_assets = [
+    def test_eligible_asset_computes_fee_yield_contribution(self) -> None:
+        # total_principal=8500, fee=1.75, created=2025-06-15, due=2026-03-15
+        # tenor_days = 273
+        # fee_yield_pct = (1.75/8500) * (365/273) * 100
+        # numerator = outstanding(3400) * fee_yield_pct
+        # denominator = outstanding(3400)
+        # effective_rate = numerator/denominator = fee_yield_pct ≈ 0.03
+        result = self.calc.process_asset(
             self._make_raw(
-                "PE-001",
-                "1000",
-                "1000",
-                "5.0",
-                "2024-01-01T00:00:00+00:00",
-                "2024-12-31",
+                "PE-001", "3400", "8500", "1.75",
+                "2025-06-15T09:00:00+00:00", "2026-03-15",
             )
-        ]
-        # fee_yield = (5/1000)*(365/365) = 0.005 = 0.5% — compliant
-        report = self.calc.calculate(raw_assets, "facility-b", "corr-001")
-        assert report.status == CovenantStatus.COMPLIANT
+        )
+        assert result.is_eligible is True
+        assert result.denominator == Decimal("3400")
+        from decimal import ROUND_HALF_UP
+        effective_rate = (result.numerator / result.denominator).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        assert effective_rate == Decimal("0.03")
 
-    def test_breach_above_threshold(self) -> None:
-        # fee_yield = (100/1000)*(365/365) = 10% > 3%
-        raw_assets = [
+    def test_ineligible_asset_has_no_contribution(self) -> None:
+        result = self.calc.process_asset(
             self._make_raw(
-                "PE-001",
-                "1000",
-                "1000",
-                "100.0",
-                "2024-01-01T00:00:00+00:00",
-                "2024-12-31",
+                "PE-002", "7111", "7111", "2.92",
+                "2023-07-22T13:52:25+00:00", "2025-07-28", status="defaulted"
             )
-        ]
-        report = self.calc.calculate(raw_assets, "facility-b", "corr-001")
-        assert report.status == CovenantStatus.BREACH
-
-    def test_excluded_defaulted_asset(self) -> None:
-        raw_assets = [
-            self._make_raw(
-                "PE-001",
-                "3400",
-                "8500",
-                "1.75",
-                "2025-06-15T09:00:00+00:00",
-                "2026-03-15",
-            ),
-            self._make_raw(
-                "PE-002",
-                "7111",
-                "7111",
-                "2.92",
-                "2023-07-22T13:52:25+00:00",
-                "2025-07-28",
-                status="defaulted",
-            ),
-        ]
-        report = self.calc.calculate(raw_assets, "facility-b", "corr-001")
-        assert "PE-001" in report.included_assets
-        assert "PE-002" in [e.external_id for e in report.excluded_assets]
-
-    def test_raises_when_no_eligible_assets(self) -> None:
-        raw_assets = [
-            self._make_raw(
-                "PE-001",
-                "7111",
-                "7111",
-                "2.92",
-                "2023-07-22T13:52:25+00:00",
-                "2025-07-28",
-                status="defaulted",
-            )
-        ]
-        with pytest.raises(CovenantCalculationError):
-            self.calc.calculate(raw_assets, "facility-b", "corr-001")
-
-    def test_threshold_stored_in_report(self) -> None:
-        raw_assets = [
-            self._make_raw(
-                "PE-001",
-                "3400",
-                "8500",
-                "1.75",
-                "2025-06-15T09:00:00+00:00",
-                "2026-03-15",
-            )
-        ]
-        report = self.calc.calculate(raw_assets, "facility-b", "corr-001")
-        assert report.threshold == Decimal("3.00")
+        )
+        assert result.is_eligible is False
+        assert result.numerator is None
+        assert result.denominator is None

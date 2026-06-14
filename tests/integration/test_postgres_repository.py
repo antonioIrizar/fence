@@ -17,6 +17,9 @@ def _make_report(facility_id: str = "facility-a") -> CovenantReport:
         excluded_assets=[],
         computed_at=datetime.now(timezone.utc),
         correlation_id="corr-test-001",
+        audit_hash="hash",
+        accumulated_numerator=Decimal("1"),
+        accumulated_denominator=Decimal("1"),
     )
 
 

@@ -1,12 +1,10 @@
-from datetime import date, datetime, timezone
-from decimal import ROUND_HALF_UP, Decimal
+from datetime import date
+from decimal import Decimal
 from typing import Any
-from uuid import uuid4
 
 from app.domain.asset.base import BaseAsset
 from app.domain.asset.nomina import NominaAsset
-from app.domain.covenant.entities import CovenantReport, CovenantStatus, ExcludedAsset
-from app.domain.errors import CovenantCalculationError, InvalidPortfolioData
+from app.domain.errors import InvalidPortfolioData
 from app.domain.facility.interfaces import (
     EligibilityPolicy,
     FacilityCalculator,
@@ -15,7 +13,6 @@ from app.domain.facility.interfaces import (
 from app.domain.facility.processing import AssetProcessingResult
 
 _THRESHOLD = Decimal("5.00")
-_TWO_PLACES = Decimal("0.01")
 _12 = Decimal("12")
 
 
@@ -142,58 +139,4 @@ class NominaCalculator(FacilityCalculator):
             exclusion_reasons=reasons,
             numerator=None,
             denominator=None,
-        )
-
-    def calculate(
-        self,
-        raw_assets: list[dict[str, Any]],
-        facility_id: str,
-        correlation_id: str,
-    ) -> CovenantReport:
-        included: list[str] = []
-        excluded: list[ExcludedAsset] = []
-        weighted_sum = Decimal("0")
-        total_outstanding = Decimal("0")
-
-        for raw in raw_assets:
-            result = self.process_asset(raw)
-            if result.is_eligible:
-                included.append(result.asset.external_id)
-                assert result.numerator is not None
-                assert result.denominator is not None
-                weighted_sum += result.numerator
-                total_outstanding += result.denominator
-            else:
-                excluded.append(
-                    ExcludedAsset(
-                        external_id=result.asset.external_id,
-                        reasons=result.exclusion_reasons,
-                    )
-                )
-
-        if total_outstanding == Decimal("0"):
-            raise CovenantCalculationError(
-                f"No eligible assets found for facility '{facility_id}'"
-            )
-
-        effective_rate = (weighted_sum / total_outstanding).quantize(
-            _TWO_PLACES, rounding=ROUND_HALF_UP
-        )
-        status = (
-            CovenantStatus.COMPLIANT
-            if effective_rate < _THRESHOLD
-            else CovenantStatus.BREACH
-        )
-
-        return CovenantReport(
-            report_id=uuid4(),
-            facility_id=facility_id,
-            effective_rate=effective_rate,
-            threshold=_THRESHOLD,
-            status=status,
-            total_assets=len(raw_assets),
-            included_assets=included,
-            excluded_assets=excluded,
-            computed_at=datetime.now(timezone.utc),
-            correlation_id=correlation_id,
         )

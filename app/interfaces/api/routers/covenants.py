@@ -1,26 +1,29 @@
+from typing import Optional
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException
-from typing import Optional
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
-from app.application.commands.calculate_covenant import CalculateCovenantCommand
+from app.application.commands.create_facility_report import CreateFacilityReportCommand
 from app.application.commands.ingest_assets import IngestAssetsCommand
+from app.application.queries.get_facility_state import GetFacilityStateQuery
 from app.application.queries.get_report import GetCovenantReportQuery
-from app.application.use_cases.calculate_covenant import CalculateCovenantUseCase
+from app.application.use_cases.create_facility_report import CreateFacilityReportUseCase
 from app.application.use_cases.get_covenant_report import (
     GetCovenantReportUseCase,
     ListCovenantReportsUseCase,
 )
-from app.application.queries.get_facility_state import GetFacilityStateQuery
 from app.application.use_cases.get_facility_state import GetFacilityStateUseCase
 from app.application.use_cases.ingest_assets import IngestAssetsUseCase
+from app.application.use_cases.verify_report import VerifyReportUseCase
 from app.domain.covenant.entities import CovenantReport
+from app.domain.errors import CovenantCalculationError
 from app.interfaces.api.dependencies import (
-    get_calculate_use_case,
+    get_create_report_use_case,
     get_facility_state_use_case,
     get_ingest_use_case,
     get_list_use_case,
     get_report_use_case,
+    get_verify_report_use_case,
 )
 from app.interfaces.api.schemas.asset import (
     CovenantStateResponse,
@@ -30,10 +33,10 @@ from app.interfaces.api.schemas.asset import (
     IngestAssetsRequest,
     IngestAssetsResponse,
 )
-from app.interfaces.api.schemas.request import CalculateCovenantRequest
 from app.interfaces.api.schemas.response import (
     CovenantReportResponse,
     ReportSummary,
+    VerifyReportResponse,
 )
 
 router = APIRouter(prefix="/api/v1/covenants", tags=["covenants"])
@@ -60,37 +63,8 @@ def _to_response(report: CovenantReport) -> CovenantReportResponse:
             for e in report.excluded_assets
         ],
         computed_at=report.computed_at,
+        audit_hash=report.audit_hash,
     )
-
-
-@router.post("/{facility_id}/calculate", response_model=CovenantReportResponse)
-def calculate_covenant(
-    facility_id: str,
-    body: CalculateCovenantRequest,
-    x_correlation_id: Optional[str] = Header(default=None),
-    use_case: CalculateCovenantUseCase = Depends(get_calculate_use_case),
-) -> CovenantReportResponse:
-    correlation_id = x_correlation_id or str(uuid4())
-    command = CalculateCovenantCommand(
-        facility_id=facility_id,
-        assets=body.assets,
-        correlation_id=correlation_id,
-    )
-    report = use_case.execute(command)
-    return _to_response(report)
-
-
-@router.get("/{facility_id}/reports/{report_id}", response_model=CovenantReportResponse)
-def get_covenant_report(
-    facility_id: str,
-    report_id: UUID,
-    use_case: GetCovenantReportUseCase = Depends(get_report_use_case),
-) -> CovenantReportResponse:
-    query = GetCovenantReportQuery(facility_id=facility_id, report_id=report_id)
-    report = use_case.execute(query)
-    if report is None:
-        raise HTTPException(status_code=404, detail="Report not found")
-    return _to_response(report)
 
 
 @router.post("/{facility_id}/assets", response_model=IngestAssetsResponse)
@@ -132,6 +106,80 @@ def get_facility_state(
             for e in result.excluded_assets
         ],
     )
+
+
+@router.post("/{facility_id}/reports", response_model=CovenantReportResponse)
+def create_facility_report(
+    facility_id: str,
+    x_correlation_id: Optional[str] = Header(default=None),
+    force: bool = Query(
+        default=False, description="Force a new report even if data is unchanged"
+    ),
+    use_case: CreateFacilityReportUseCase = Depends(get_create_report_use_case),
+) -> CovenantReportResponse:
+    """
+    Seal the current covenant state as an immutable, auditable report.
+
+    Idempotent by default: if asset data has not changed since the last report,
+    the existing report is returned (same audit_hash). Pass ?force=true to seal
+    a new record regardless (e.g. after a compliance review event).
+
+    The audit_hash in the response can be independently verified at any time
+    by a Capital Provider or Asset Originator via the /verify endpoint.
+    """
+    correlation_id = x_correlation_id or str(uuid4())
+    command = CreateFacilityReportCommand(
+        facility_id=facility_id,
+        correlation_id=correlation_id,
+        force_new=force,
+    )
+    try:
+        report = use_case.execute(command)
+    except CovenantCalculationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _to_response(report)
+
+
+@router.get(
+    "/{facility_id}/reports/{report_id}/verify",
+    response_model=VerifyReportResponse,
+)
+def verify_report(
+    facility_id: str,
+    report_id: UUID,
+    use_case: VerifyReportUseCase = Depends(get_verify_report_use_case),
+) -> VerifyReportResponse:
+    """
+    Verify the audit_hash of a sealed report against live PostgreSQL data.
+
+    Returns is_valid=true when the data is intact, false when a discrepancy
+    is detected (potential tampering). Callable by Capital Providers and
+    Asset Originators at any time without side effects.
+    """
+    try:
+        result = use_case.execute(facility_id=facility_id, report_id=report_id)
+    except CovenantCalculationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return VerifyReportResponse(
+        report_id=result.report_id,
+        facility_id=result.facility_id,
+        is_valid=result.is_valid,
+        stored_hash=result.stored_hash,
+        computed_hash=result.computed_hash,
+    )
+
+
+@router.get("/{facility_id}/reports/{report_id}", response_model=CovenantReportResponse)
+def get_covenant_report(
+    facility_id: str,
+    report_id: UUID,
+    use_case: GetCovenantReportUseCase = Depends(get_report_use_case),
+) -> CovenantReportResponse:
+    query = GetCovenantReportQuery(facility_id=facility_id, report_id=report_id)
+    report = use_case.execute(query)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return _to_response(report)
 
 
 @router.get("/{facility_id}/reports", response_model=list[CovenantReportResponse])

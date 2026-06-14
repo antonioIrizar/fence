@@ -32,6 +32,9 @@ class PostgresCovenantReportRepository(CovenantReportRepository):
                 ],
                 computed_at=report.computed_at,
                 correlation_id=report.correlation_id,
+                audit_hash=report.audit_hash,
+                accumulated_numerator=str(report.accumulated_numerator),
+                accumulated_denominator=str(report.accumulated_denominator),
             )
             self._session.add(model)
             self._session.flush()
@@ -55,6 +58,15 @@ class PostgresCovenantReportRepository(CovenantReportRepository):
         )
         return [self._to_domain(m) for m in models]
 
+    def find_latest_by_facility(self, facility_id: str) -> Optional[CovenantReport]:
+        model = (
+            self._session.query(CovenantReportModel)
+            .filter(CovenantReportModel.facility_id == facility_id)
+            .order_by(CovenantReportModel.computed_at.desc())
+            .first()
+        )
+        return self._to_domain(model) if model is not None else None
+
     @staticmethod
     def _to_domain(model: CovenantReportModel) -> CovenantReport:
         return CovenantReport(
@@ -74,4 +86,7 @@ class PostgresCovenantReportRepository(CovenantReportRepository):
             ],
             computed_at=model.computed_at,
             correlation_id=model.correlation_id,
+            audit_hash=model.audit_hash,
+            accumulated_numerator=Decimal(str(model.accumulated_numerator)),
+            accumulated_denominator=Decimal(str(model.accumulated_denominator)),
         )

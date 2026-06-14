@@ -106,3 +106,10 @@ class CovenantReportModel(Base):
         DateTime(timezone=True), nullable=False
     )
     correlation_id: Mapped[str] = mapped_column(String, nullable=False)
+    audit_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    accumulated_numerator: Mapped[Decimal] = mapped_column(
+        Numeric(30, 10), nullable=False
+    )
+    accumulated_denominator: Mapped[Decimal] = mapped_column(
+        Numeric(30, 10), nullable=False
+    )

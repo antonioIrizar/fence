@@ -5,14 +5,15 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 
 from app.application.registry import FacilityRegistry
-from app.application.use_cases.calculate_covenant import CalculateCovenantUseCase
 from app.application.use_cases.get_covenant_report import (
     GetCovenantReportUseCase,
     ListCovenantReportsUseCase,
 )
 from app.application.services.asset_ingestion_service import AssetIngestionService
+from app.application.use_cases.create_facility_report import CreateFacilityReportUseCase
 from app.application.use_cases.get_facility_state import GetFacilityStateUseCase
 from app.application.use_cases.ingest_assets import IngestAssetsUseCase
+from app.application.use_cases.verify_report import VerifyReportUseCase
 from app.domain.asset.repository import AssetRepository
 from app.domain.covenant.repository import CovenantReportRepository
 from app.domain.covenant.state_repository import FacilityCovenantStateRepository
@@ -65,16 +66,6 @@ def get_publisher(
     return DatabasePublisher()
 
 
-def get_calculate_use_case(
-    registry: FacilityRegistry = Depends(get_registry),
-    repository: CovenantReportRepository = Depends(get_repository),
-    publisher: Publisher = Depends(get_publisher),
-) -> CalculateCovenantUseCase:
-    return CalculateCovenantUseCase(
-        registry=registry, repository=repository, publisher=publisher
-    )
-
-
 def get_report_use_case(
     repository: CovenantReportRepository = Depends(get_repository),
 ) -> GetCovenantReportUseCase:
@@ -106,6 +97,34 @@ def get_asset_ingestion_service(
     return AssetIngestionService(
         asset_repository=asset_repository,
         registry=registry,
+    )
+
+
+def get_create_report_use_case(
+    state_repository: FacilityCovenantStateRepository = Depends(
+        get_covenant_state_repository
+    ),
+    asset_repository: AssetRepository = Depends(get_asset_repository),
+    registry: FacilityRegistry = Depends(get_registry),
+    report_repository: CovenantReportRepository = Depends(get_repository),
+    publisher: Publisher = Depends(get_publisher),
+) -> CreateFacilityReportUseCase:
+    return CreateFacilityReportUseCase(
+        state_repository=state_repository,
+        asset_repository=asset_repository,
+        registry=registry,
+        report_repository=report_repository,
+        publisher=publisher,
+    )
+
+
+def get_verify_report_use_case(
+    report_repository: CovenantReportRepository = Depends(get_repository),
+    asset_repository: AssetRepository = Depends(get_asset_repository),
+) -> VerifyReportUseCase:
+    return VerifyReportUseCase(
+        report_repository=report_repository,
+        asset_repository=asset_repository,
     )
 
 

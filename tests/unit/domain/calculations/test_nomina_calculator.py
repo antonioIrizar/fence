@@ -7,8 +7,7 @@ from app.domain.calculations.nomina import (
     NominaEligibilityPolicy,
     NominaMapper,
 )
-from app.domain.covenant.entities import CovenantStatus
-from app.domain.errors import CovenantCalculationError, InvalidPortfolioData
+from app.domain.errors import InvalidPortfolioData
 
 
 class TestNominaEligibilityPolicy:
@@ -139,81 +138,44 @@ class TestNominaCalculator:
             "amount": float(outstanding),
         }
 
-    def test_annualized_fee_calculation(self) -> None:
-        # Asset: outstanding=900, fee=2.5%, 2024-05-31 to 31/01/2025
-        # repayment_months = 8 months
+    def test_threshold_property(self) -> None:
+        assert self.calc.threshold == Decimal("5.00")
+
+    def test_eligible_asset_computes_annualized_fee_contribution(self) -> None:
+        # outstanding=900, fee=2.5%, 2024-05-31 to 31/01/2025 → 8 months
         # annualized_fee = 2.5 * (12/8) = 3.75
-        # Effective rate = 3.75 (single asset)
-        raw_assets = [
+        # numerator = 900 * 3.75 = 3375
+        # denominator = 900
+        result = self.calc.process_asset(
             self._make_raw("NOM-001", "900", "2.5", "2024-05-31", "31/01/2025")
-        ]
-        report = self.calc.calculate(raw_assets, "facility-c", "corr-001")
-        assert report.effective_rate == Decimal("3.75")
-        assert report.status == CovenantStatus.COMPLIANT
+        )
+        assert result.is_eligible is True
+        expected = Decimal("900") * Decimal("2.5") * (Decimal("12") / Decimal("8"))
+        assert result.numerator == expected
+        assert result.denominator == Decimal("900")
 
-    def test_weighted_average_two_assets(self) -> None:
-        # Asset1: outstanding=900, fee=2.5%, 8 months → annualized=3.75
-        # Asset2: outstanding=2500, fee=2.0%, 2024-06-27 to 31/01/2025
-        #   repayment_months = 7 months, annualized = 2.0*(12/7) ≈ 3.4286
-        # Weighted = (900*3.75 + 2500*3.4286) / 3400
-        #          = (3375 + 8571.43) / 3400 ≈ 3.51
-        raw_assets = [
-            self._make_raw("NOM-001", "900", "2.5", "2024-05-31", "31/01/2025"),
-            self._make_raw("NOM-002", "2500", "2.0", "2024-06-27", "31/01/2025"),
-        ]
-        report = self.calc.calculate(raw_assets, "facility-c", "corr-001")
-        assert report.effective_rate == Decimal("3.51")
-
-    def test_compliant_below_threshold(self) -> None:
-        raw_assets = [
+    def test_weighted_sum_of_two_assets(self) -> None:
+        # Asset1: outstanding=900, annualized=3.75  → numerator=3375, denom=900
+        # Asset2: outstanding=2500, 7 months         → numerator=2500*(2*(12/7))
+        r1 = self.calc.process_asset(
             self._make_raw("NOM-001", "900", "2.5", "2024-05-31", "31/01/2025")
-        ]
-        report = self.calc.calculate(raw_assets, "facility-c", "corr-001")
-        assert report.status == CovenantStatus.COMPLIANT
+        )
+        r2 = self.calc.process_asset(
+            self._make_raw("NOM-002", "2500", "2.0", "2024-06-27", "31/01/2025")
+        )
+        from decimal import ROUND_HALF_UP
+        total_num = r1.numerator + r2.numerator
+        total_den = r1.denominator + r2.denominator
+        rate = (total_num / total_den).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        assert rate == Decimal("3.51")
 
-    def test_breach_above_threshold(self) -> None:
-        # fee=10%, 1 month tenure → annualized = 10*12 = 120% — well above 5%
-        raw_assets = [
-            self._make_raw("NOM-001", "1000", "10.0", "2024-12-31", "31/01/2025")
-        ]
-        report = self.calc.calculate(raw_assets, "facility-c", "corr-001")
-        assert report.status == CovenantStatus.BREACH
-
-    def test_excluded_written_off(self) -> None:
-        raw_assets = [
-            self._make_raw("NOM-001", "900", "2.5", "2024-05-31", "31/01/2025"),
+    def test_ineligible_asset_has_no_contribution(self) -> None:
+        result = self.calc.process_asset(
             self._make_raw(
-                "NOM-002",
-                "4100",
-                "2.5",
-                "2024-06-21",
-                "31/08/2024",
-                status="written_off",
-                is_eligible=False,
-            ),
-        ]
-        report = self.calc.calculate(raw_assets, "facility-c", "corr-001")
-        assert "NOM-001" in report.included_assets
-        assert "NOM-002" in [e.external_id for e in report.excluded_assets]
-
-    def test_raises_when_no_eligible_assets(self) -> None:
-        raw_assets = [
-            self._make_raw(
-                "NOM-001",
-                "4100",
-                "2.5",
-                "2024-06-21",
-                "31/08/2024",
-                status="written_off",
-                is_eligible=False,
+                "NOM-002", "4100", "2.5", "2024-06-21", "31/08/2024",
+                status="written_off", is_eligible=False,
             )
-        ]
-        with pytest.raises(CovenantCalculationError):
-            self.calc.calculate(raw_assets, "facility-c", "corr-001")
-
-    def test_threshold_stored_in_report(self) -> None:
-        raw_assets = [
-            self._make_raw("NOM-001", "900", "2.5", "2024-05-31", "31/01/2025")
-        ]
-        report = self.calc.calculate(raw_assets, "facility-c", "corr-001")
-        assert report.threshold == Decimal("5.00")
+        )
+        assert result.is_eligible is False
+        assert result.numerator is None
+        assert result.denominator is None

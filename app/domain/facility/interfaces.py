@@ -3,7 +3,6 @@ from decimal import Decimal
 from typing import Any
 
 from app.domain.asset.base import BaseAsset
-from app.domain.covenant.entities import CovenantReport
 from app.domain.facility.processing import AssetProcessingResult
 
 
@@ -34,10 +33,10 @@ class FacilityMapper(ABC):
 
 class FacilityCalculator(ABC):
     """
-    Orchestrates eligibility filtering and rate calculation for one facility.
+    Orchestrates eligibility filtering and per-asset rate contribution for one facility.
 
-    Inputs: raw asset dicts, facility_id, correlation_id.
-    Outputs: CovenantReport (batch) or AssetProcessingResult (per-asset).
+    Inputs: raw asset dict.
+    Outputs: AssetProcessingResult with numerator/denominator for state accumulation.
     """
 
     @property
@@ -57,11 +56,3 @@ class FacilityCalculator(ABC):
 
         Raises: InvalidPortfolioData if the raw dict is malformed.
         """
-
-    @abstractmethod
-    def calculate(
-        self,
-        raw_assets: list[dict[str, Any]],
-        facility_id: str,
-        correlation_id: str,
-    ) -> CovenantReport: ...

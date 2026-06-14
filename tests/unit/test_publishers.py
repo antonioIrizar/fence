@@ -28,6 +28,9 @@ def _make_report() -> CovenantReport:
         excluded_assets=[],
         computed_at=datetime.now(timezone.utc),
         correlation_id="corr-001",
+        audit_hash="a" * 64,
+        accumulated_numerator=Decimal("19430"),
+        accumulated_denominator=Decimal("1000"),
     )
 
 

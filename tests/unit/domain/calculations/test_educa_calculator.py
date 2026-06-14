@@ -7,8 +7,7 @@ from app.domain.calculations.educa import (
     EducaEligibilityPolicy,
     EducaMapper,
 )
-from app.domain.covenant.entities import CovenantStatus
-from app.domain.errors import CovenantCalculationError, InvalidPortfolioData
+from app.domain.errors import InvalidPortfolioData
 
 # ---------------------------------------------------------------------------
 # EducaEligibilityPolicy
@@ -180,75 +179,27 @@ class TestEducaCalculator:
             "amount": float(outstanding),
         }
 
-    def test_weighted_average_calculation(self) -> None:
-        # Two assets: outstanding 4875 @ 20.86%, 10200 @ 18.54%
-        # Weighted sum = 4875*20.86 + 10200*18.54 = 101694.5 + 189108 = 290802.5
-        # Total outstanding = 15075
-        # Rate = 290802.5 / 15075 ≈ 19.29%
-        raw_assets = [
-            self._make_raw("A1", "4875", "20.86"),
-            self._make_raw("A2", "10200", "18.54"),
-        ]
-        report = self.calc.calculate(raw_assets, "facility-a", "corr-001")
-        assert report.effective_rate == Decimal("19.29")
+    def test_threshold_property(self) -> None:
+        assert self.calc.threshold == Decimal("22.00")
 
-    def test_excluded_assets_in_report(self) -> None:
-        raw_assets = [
-            self._make_raw("A1", "4875", "20.86"),
-            self._make_raw("A2", "7100", "25.11", loan_status="delinquent"),
-            self._make_raw("A3", "3200", "19.50", status="closed"),
-        ]
-        report = self.calc.calculate(raw_assets, "facility-a", "corr-001")
-        assert "A1" in report.included_assets
-        excluded_ids = [e.external_id for e in report.excluded_assets]
-        assert "A2" in excluded_ids
-        assert "A3" in excluded_ids
+    def test_eligible_asset_computes_weighted_contribution(self) -> None:
+        # numerator = outstanding * rate = 4875 * 20.86
+        # denominator = outstanding = 4875
+        result = self.calc.process_asset(self._make_raw("A1", "4875", "20.86"))
+        assert result.is_eligible is True
+        assert result.numerator == Decimal("4875") * Decimal("20.86")
+        assert result.denominator == Decimal("4875")
 
-    def test_summary_counts(self) -> None:
-        raw_assets = [
-            self._make_raw("A1", "4875", "20.86"),
-            self._make_raw("A2", "7100", "25.11", loan_status="delinquent"),
-        ]
-        report = self.calc.calculate(raw_assets, "facility-a", "corr-001")
-        assert report.total_assets == 2
-        assert len(report.included_assets) == 1
-        assert len(report.excluded_assets) == 1
+    def test_ineligible_asset_has_no_contribution(self) -> None:
+        result = self.calc.process_asset(
+            self._make_raw("A2", "7100", "25.11", loan_status="delinquent")
+        )
+        assert result.is_eligible is False
+        assert result.numerator is None
+        assert result.denominator is None
 
-    def test_compliant_status_below_threshold(self) -> None:
-        raw_assets = [self._make_raw("A1", "10000", "20.00")]
-        report = self.calc.calculate(raw_assets, "facility-a", "corr-001")
-        assert report.status == CovenantStatus.COMPLIANT
-
-    def test_breach_status_at_threshold(self) -> None:
-        raw_assets = [self._make_raw("A1", "10000", "22.00")]
-        report = self.calc.calculate(raw_assets, "facility-a", "corr-001")
-        assert report.status == CovenantStatus.BREACH
-
-    def test_breach_status_above_threshold(self) -> None:
-        raw_assets = [self._make_raw("A1", "10000", "25.00")]
-        report = self.calc.calculate(raw_assets, "facility-a", "corr-001")
-        assert report.status == CovenantStatus.BREACH
-
-    def test_raises_when_no_eligible_assets(self) -> None:
-        raw_assets = [
-            self._make_raw("A1", "7100", "25.11", loan_status="delinquent"),
-        ]
-        with pytest.raises(CovenantCalculationError):
-            self.calc.calculate(raw_assets, "facility-a", "corr-001")
-
-    def test_threshold_stored_in_report(self) -> None:
-        raw_assets = [self._make_raw("A1", "10000", "20.00")]
-        report = self.calc.calculate(raw_assets, "facility-a", "corr-001")
-        assert report.threshold == Decimal("22.00")
-
-    def test_null_rate_excluded(self) -> None:
-        raw_assets = [
-            self._make_raw("A1", "4875", "20.86"),
-            {
-                **self._make_raw("A2", "7000", "0"),
-                "interest_rate_percentage": None,
-            },
-        ]
-        report = self.calc.calculate(raw_assets, "facility-a", "corr-001")
-        assert "A2" in [e.external_id for e in report.excluded_assets]
-        assert "A1" in report.included_assets
+    def test_null_rate_asset_is_ineligible(self) -> None:
+        raw = {**self._make_raw("A2", "7000", "0"), "interest_rate_percentage": None}
+        result = self.calc.process_asset(raw)
+        assert result.is_eligible is False
+        assert result.numerator is None

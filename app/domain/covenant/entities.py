@@ -34,3 +34,6 @@ class CovenantReport(BaseModel):
     excluded_assets: list[ExcludedAsset]
     computed_at: datetime
     correlation_id: str
+    audit_hash: str
+    accumulated_numerator: Decimal
+    accumulated_denominator: Decimal
