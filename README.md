@@ -4,92 +4,31 @@ Automates covenant compliance for credit facilities: ingests portfolio data from
 
 ---
 
-## Overview
+## Your Reasoning and Assumptions
 
-Fence operates as a **Calculation Agency** for multiple facilities, each with a different Asset Originator, a different asset data model, and a different rate calculation formula defined in their Credit Agreement. The system must:
+### Data Ingestion & Scaling
+- **Assumptions on Payload Size:** The system exposes an API endpoint designed to ingest an array of assets. It is assumed that the batch size per request will remain within a reasonable threshold (up to a few hundred assets). If the data volume grows significantly, consumers can chunk the dataset into multiple sequential requests. For massive datasets, the design should evolve to support file uploads processed via asynchronous batch jobs.
+- **Data Deduplication:** It is assumed that all ingested assets are new. The system does not currently support in-place updates. If a duplicate asset is detected, it is safely discarded, and the API returns a warning notification within the ingestion response.
+- **Auditability:** Every asset is stored in its raw format inside a PostgreSQL database. This ensures future debuggability and serves as the source of truth for generating audit hashes.
 
-1. **Ingest** raw portfolio data submitted by the originator
-2. **Compute** the effective interest rate using the facility's formula
-3. **Publish** the result as an immutable covenant report that both the Capital Provider and the Asset Originator can independently verify
+### Real-Time Analytics & Aggregations
+- **Incremental Aggregate Pattern:** To ensure metrics like the interest rate are available in real-time with zero query delay, calculations are pre-computed during the ingestion phase using an **Incremental Aggregate Pattern**. Instead of scanning the entire dataset on every read, metrics are updated incrementally as new assets arrive.
+- **Formula Adjustment (Facility B):** During implementation, it was noted that to properly utilize `fee_yield` in the calculation, it needed to be converted into a percentage format. Therefore, the result was adjusted by multiplying by 100 to ensure mathematical correctness.
 
----
-
-## Quick Start
-
-```bash
-cp .env.example .env
-docker compose up --build
-```
-
-The API starts at `http://localhost:8000`. Docs at `http://localhost:8000/docs`.
-
-### Run a calculation
-
-```bash
-# Facility A — Educa Capital I
-curl -X POST http://localhost:8000/api/v1/covenants/facility-a/calculate \
-  -H "Content-Type: application/json" \
-  -d @data/facility_a_educa_isa.json
-
-# Facility B — PayEarly US
-curl -X POST http://localhost:8000/api/v1/covenants/facility-b/calculate \
-  -H "Content-Type: application/json" \
-  -d @data/facility_b_payearly_ewa.json
-
-# Facility C — Nomina Express I
-curl -X POST http://localhost:8000/api/v1/covenants/facility-c/calculate \
-  -H "Content-Type: application/json" \
-  -d @data/facility_c_nomina.json
-```
-
-### Retrieve a report
-
-```bash
-curl http://localhost:8000/api/v1/covenants/facility-a/reports/{report_id}
-curl http://localhost:8000/api/v1/covenants/facility-a/reports
-```
+### Smart Contract & Report Generation
+- **Idempotency & History:** The endpoint responsible for generating the smart contract or report is strictly idempotent. If a report has already been generated for the given context, the system fetches and returns the existing one instead of recreating it. (API has boolean to force to create a new) Furthermore, the architecture stores all Smart contracts report.
+- **On-Chain Optimization (Audit Hash):** Uploading raw data for every single asset directly to the blockchain is highly inefficient, cost-prohibitive, and would quickly lead to chain bloat. To solve this, the architecture implements an **Audit Hash** mechanism. A verification hash is computed cryptographically from the asset data stored in PostgreSQL, and only this compact hash is anchored to the smart contract. 
+- **Verification Endpoint:** An endpoint has been exposed to verify the integrity of the database against the smart contract hash. If a malicious actor or a system failure alters the asset data in PostgreSQL, the hashes will mismatch immediately. 
 
 ---
 
-## Architecture
+## How Your Design Handles the Variability Across Facilities
 
-The system follows **Domain Driven Design** with a strict dependency rule:
+The core architecture strictly adheres to **Domain-Driven Design (DDD)** principles. To elegantly handle different business rules and calculation logic across various facilities, the **Strategy Pattern** was implemented. 
 
-```
-Interfaces (FastAPI routes)
-       ↓
-Application (use cases, registry)
-       ↓
-Domain (entities, calculators, policies — pure Python)
-       ↑
-Infrastructure (SQLAlchemy, publishers — depends on Domain interfaces)
-```
+By decoupling the specific facility logic from the orchestration layer, adding a new facility type or modifying an existing one is entirely trivial. It only requires introducing a new strategy implementation that fulfills the domain interface, completely eliminating the risk of regression in existing facility workflows.
 
-### Directory layout
-
-```
-app/
-  domain/
-    asset/          — EducaAsset, PayEarlyAsset, NominaAsset (Pydantic, Decimal)
-    facility/       — FacilityCalculator, EligibilityPolicy, FacilityMapper (ABC)
-    covenant/       — CovenantReport entity, CovenantReportRepository (ABC)
-    calculations/   — One module per facility: calculator + policy + mapper
-    publishers/     — Publisher (ABC)
-    errors.py       — Domain exceptions (no FastAPI/HTTP dependency)
-  application/
-    use_cases/      — CalculateCovenantUseCase, GetCovenantReportUseCase
-    registry.py     — FacilityRegistry (maps facility_id → FacilityCalculator)
-  infrastructure/
-    database/       — SQLAlchemy models + session
-    repositories/   — PostgresCovenantReportRepository
-    publishers/     — DatabasePublisher, SmartContractPublisher (stub)
-  interfaces/
-    api/            — FastAPI routes, Pydantic schemas, DI wiring
-```
-
----
-
-## Handling Facility Variability — Strategy Pattern
+### Add new facility
 
 Each facility has its own data model, status vocabulary, and rate formula. The **Strategy Pattern** isolates this variability:
 
@@ -102,97 +41,110 @@ Each facility has its own data model, status vocabulary, and rate formula. The *
 Adding a new facility requires only:
 
 1. A new asset model (`app/domain/asset/facility_d.py`)
-2. A new calculations module (`app/domain/calculations/facility_d.py`) with mapper, policy, and calculator
+2. A new calculations module (`app/domain/calculations/facility_d.py`) with implement interface of mapper, policy, and calculator
 3. One `registry.register("facility-d", FacilityDCalculator())` line in `dependencies.py`
 
 No existing calculation logic is touched.
 
 ---
 
-## Rate Calculation Specifications
+## How the Covenant Model Influenced Your Architecture
 
-### Facility A — Educa Capital I (Education Loans)
-
-**Formula:** Weighted Average Loan IRR
-
-```
-Effective Rate = Σ(outstanding_amount_i × interest_rate_percentage_i) / Σ(outstanding_amount_i)
-```
-
-**Eligibility:** `status == "open"` (case-insensitive), `is_eligible == True`, `loan_status == "current"`, `interest_rate_percentage` not null
-
-**Threshold:** `< 22.00%` — breach triggers disbursement pause
-
-### Facility B — PayEarly US (Earned Wage Access)
-
-**Formula:** Portfolio Fee Yield (EWA products carry 0% interest)
-
-```
-tenor_days_i    = (due_date - created_at.date()).days
-fee_yield_i     = (total_fee_amount_i / total_principal_amount_i) × (365 / tenor_days_i)
-Effective Rate  = Σ(outstanding_principal_i × fee_yield_i) / Σ(outstanding_principal_i)
-```
-
-**Eligibility:** `status == "performing"` (case-insensitive), `is_eligible == True`, `outstanding_principal_amount > 0`
-
-**Threshold:** `< 3.00%` — breach triggers Advance Cap Review
-
-### Facility C — Nomina Express I (Salary Advance)
-
-**Formula:** Weighted Average Annualized Advance Fee
-
-```
-repayment_months_i = calendar months between origination_date and maturity_date
-annualized_fee_i   = fee_percentage_i × (12 / repayment_months_i)
-Effective Rate     = Σ(outstanding_amount_i × annualized_fee_i) / Σ(outstanding_amount_i)
-```
-
-Note: `maturity_date` is in `DD/MM/YYYY` format.
-
-**Eligibility:** `status == "active"` (case-insensitive), `is_eligible == True`, `outstanding_amount > 0`
-
-**Threshold:** `< 5.00%` — breach requires originator to reduce advance ratio
+The Covenant Model acted as the primary driver for two major architectural patterns in this solution:
+1. **The Audit Hash Approach:** The need to enforce covenants without overloading the blockchain led to pushing the raw asset storage off-chain (PostgreSQL) while maintaining cryptographic verification on-chain.
+2. **Incremental Aggregate Pattern:** Covenant validation requires fast, reactive checks. Pre-computing the interest rate and other key metrics during ingestion ensures the system can evaluate covenant health instantly without performing heavy, blocking database aggregations at runtime.
 
 ---
 
-## Covenant Model and Immutability
+## Trade-offs You Considered
 
-The effective interest rate is a **covenant** — a binding term in the Credit Agreement. Once computed and published, it must be independently verifiable by both parties and serve as an authoritative input for downstream settlement and compliance checks.
-
-This has two architectural consequences:
-
-1. **Immutable reports**: each calculation creates a new `covenant_reports` row. Existing rows are never updated or deleted. `report_id` (UUID) is the stable reference.
-
-2. **Publisher abstraction**: the `Publisher` interface decouples the persistence mechanism from the domain logic. The `DatabasePublisher` (default) writes to PostgreSQL. The `SmartContractPublisher` is a documented stub ready for a `web3.py` integration — see `app/infrastructure/publishers/smart_contract_publisher.py` for the extension points.
-
-To switch to smart contract publishing, set `PUBLISHER_BACKEND=smart_contract` in `.env`.
-
+1. **No Asset Updates/Recalculations:** The system currently treats assets as immutable. Implementing asset modifications would require managing deltas and establishing a historical snapshot ledger of assets so that old smart contracts can still be validated against the exact state of the data at their time of creation.
+2. **Public API Exposure:** The API is currently exposed without security layers. In a production environment, an authentication layer (such as JWT/OAuth2) is mandatory.
+3. **Lack of Rate Limiting:** There is currently no protection against API abuse or Distributed Denial of Service (DDoS) attacks.
+4. **Covenant Threshold Behavior:** No automated workflows are currently triggered upon breaching a Covenant Threshold. In a real-world scenario, the system should immediately halt asset ingestion for that facility and trigger real-time alerts (e.g., webhooks, email notifications) to the client.
+5. **No real smart contract:** It is simulate with PostgreSQL. Code is implement to can switch to use web3. You can see on file [smart_contract_publisher.py](app/infrastructure/publishers/smart_contract_publisher.py) a first implementation, but it is not finish and not testing.
 ---
 
-## Financial Calculation Correctness
+## How You Would Evolve the Solution to Production-Ready
 
-All arithmetic uses Python's `Decimal` type — never `float`. Every rate is rounded to 2 decimal places with `ROUND_HALF_UP` before the threshold comparison and before returning to the caller. This ensures deterministic, auditable results regardless of platform.
+To transition this proof-of-concept into a secure, robust, and highly scalable production system, the following roadmap is proposed:
 
----
+### 1. Security & Infrastructure
+- **Authentication & Authorization:** Secure all endpoints using standard protocols (JWT, API Keys, or OAuth2).
+- **Cloud Migration & High Availability:** Deploy the application to a cloud provider (e.g., AWS, GCP) utilizing a Load Balancer to distribute traffic across multi-availability zone clusters.
+- **Rate Limiting:** Implement API throttling (e.g., token bucket algorithm via Redis) to prevent system abuse.
 
-## API
+### 2. Observability & Monitoring
+- **Application Performance Monitoring (APM):** Integrate observability tools such as Sentry for error tracking, and New Relic or Datadog for real-time performance metrics and traces.
+- **Structured Logging:** Implement standardized, structured JSON logging to facilitate centralized log management and querying (e.g., ELK stack or Grafana Loki).
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/api/v1/covenants/{facility_id}/calculate` | Submit portfolio, receive covenant report |
-| `GET` | `/api/v1/covenants/{facility_id}/reports/{report_id}` | Retrieve report by ID |
-| `GET` | `/api/v1/covenants/{facility_id}/reports` | List all reports for facility |
+### 3. Data Architecture & Scalability
+- **Dedicated Summary Analytics Database:** The summary report details which assets were included or excluded (along with exclusion reasons). Querying this from PostgreSQL at scale will introduce significant delays. This data should be pre-computed and stored in a read-optimized data store or a fast document-store database.
+- **CQRS & Event Streaming Architecture:** Under high-throughput conditions, the system should pivot to a **Command Query Responsibility Segregation (CQRS)** pattern. Utilizing **Apache Kafka** as an event streaming backbone would allow asynchronous, decoupled processing of asset ingestion (Command side) and aggregation queries (Query side). Python frameworks tailored for this, such as **Faust (Kafka Streams)**, should be evaluated for processing data streams in real-time.
+- **Production-Grade Smart Contract Integration:** Transition from the current mocked/isolated ledger state into a fully realized blockchain integration wrapper, utilizing a real Ethereum provider node. The current architecture has been cleanly abstracted to make this swap seamless.
+- **Verify audit hash:** To achieve ultimate trustlessness, the recommended production flow would be to provide clients with the exact hashing formula. This empowers them to download the raw assets locally and verify the cryptographic proof independently within their own infrastructure.
 
-Pass `X-Correlation-ID` header for end-to-end tracing. Auto-generated if absent.
+## Setup and usage instructions
 
-**Error responses:**
+```bash
+cp .env.example .env
+docker compose up --build
+```
 
-| Error | HTTP |
-|---|---|
-| Unknown `facility_id` | 404 |
-| Malformed asset data | 422 |
-| No eligible assets | 500 |
-| Persistence failure | 500 |
+The API starts at `http://localhost:8000`. Docs at `http://localhost:8000/docs`.
+
+### Insert assets
+
+```bash
+# Facility A — Educa Capital I
+curl -X POST http://localhost:8000/api/v1/covenants/facility-a/assets \
+  -H "Content-Type: application/json" \
+  -d @data/facility_a_educa_isa.json
+
+# Facility B — PayEarly US
+curl -X POST http://localhost:8000/api/v1/covenants/facility-b/assets \
+  -H "Content-Type: application/json" \
+  -d @data/facility_b_payearly_ewa.json
+
+# Facility C — Nomina Express I
+curl -X POST http://localhost:8000/api/v1/covenants/facility-c/assets \
+  -H "Content-Type: application/json" \
+  -d @data/facility_c_nomina.json
+```
+
+### Retrieve a current facility state
+```bash
+# Facility B — PayEarly US
+curl -X 'GET' \
+  'http://localhost:8000/api/v1/covenants/facility-b/state' \
+  -H 'accept: application/json'
+```
+### Generate new a report (Smart contract)
+
+```bash
+# Facility B — PayEarly US
+curl -X 'POST' \
+  'http://localhost:8000/api/v1/covenants/facility-b/reports?force=true' \
+  -H 'accept: application/json' \
+  -d ''
+```
+
+### Retrieve a report
+
+```bash
+# Facility B — PayEarly US
+curl http://localhost:8000/api/v1/covenants/facility-b/reports/{report_id}
+curl http://localhost:8000/api/v1/covenants/facility-b/reports
+```
+
+### Verify a report (Smart contract)
+
+```bash
+# Facility B — PayEarly US
+curl -X 'GET' \
+  'http://localhost:8000/api/v1/covenants/facility-b/reports/{report_id}/verify' \
+  -H 'accept: application/json'
+```
 
 ---
 
@@ -206,39 +158,4 @@ pytest --cov=app --cov-fail-under=90
 docker compose run api pytest
 ```
 
-Coverage targets:
-- Overall: ≥ 90% (currently ~97%)
-- `app/domain/calculations/`: 100%
-
 ---
-
-## Trade-offs and Decisions
-
-| Decision | Choice | Rationale |
-|---|---|---|
-| Arithmetic | `Decimal` | Deterministic, auditable; `float` is a bug |
-| DB sync driver | `psycopg2` (sync) | Simpler for a challenge; swap to `asyncpg` + SQLAlchemy async for production throughput |
-| Report storage | Append-only rows | Covenant immutability; no soft-deletes |
-| Asset storage | JSON columns | Schema differs per facility; avoids EAV complexity |
-| Smart contract | Stub | Correct abstraction in place; web3 integration is a one-file change |
-| Status normalisation | `.lower()` comparison | Originators send inconsistent casing (open/OPEN/Open) |
-
----
-
-## Path to Production
-
-1. **Async database**: replace `psycopg2` + sync SQLAlchemy with `asyncpg` + `sqlalchemy[asyncio]`; use `async def` routes
-2. **Smart contract publishing**: implement `SmartContractPublisher.publish()` with `web3.py`, encode ABI calldata, submit signed transaction, store `tx_hash`
-3. **Structured logging**: wire `structlog` with the required `facility_id / covenant_id / report_id / correlation_id` fields
-4. **Auth**: add JWT middleware at the API boundary
-5. **Event sourcing**: replace direct DB writes with domain events for a full audit trail
-6. **Alembic migrations**: already wired; run `alembic upgrade head` on deploy (done automatically in `docker compose up`)
-
----
-
-## Assumptions
-
-- Status field comparisons are case-insensitive (originators send `"open"`, `"Open"`, `"OPEN"`)
-- `repayment_months` for Nomina uses a floor of 1 when origination and maturity fall in the same calendar month
-- The `amount` field present in all originator payloads maps to the `BaseAsset.amount` field (original disbursement basis); facility-specific outstanding amounts drive calculations
-- A calculation with zero eligible assets raises an error rather than publishing a zero-rate report, since a zero result would be meaningless and potentially misleading as a covenant
