@@ -29,9 +29,7 @@ class _SQLiteAssetRepository(PostgresAssetRepository):
     """Strips UTC timezone before comparison because SQLite stores datetimes
     as naive UTC strings — a workaround that must not exist in production code."""
 
-    def find_by_facility_at(
-        self, facility_id: str, at: datetime
-    ) -> list[AssetRecord]:
+    def find_by_facility_at(self, facility_id: str, at: datetime) -> list[AssetRecord]:
         at_naive = at.replace(tzinfo=None) if at.tzinfo is not None else at
         return super().find_by_facility_at(facility_id, at_naive)
 

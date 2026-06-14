@@ -164,6 +164,7 @@ class TestNominaCalculator:
             self._make_raw("NOM-002", "2500", "2.0", "2024-06-27", "31/01/2025")
         )
         from decimal import ROUND_HALF_UP
+
         total_num = r1.numerator + r2.numerator
         total_den = r1.denominator + r2.denominator
         rate = (total_num / total_den).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -172,8 +173,13 @@ class TestNominaCalculator:
     def test_ineligible_asset_has_no_contribution(self) -> None:
         result = self.calc.process_asset(
             self._make_raw(
-                "NOM-002", "4100", "2.5", "2024-06-21", "31/08/2024",
-                status="written_off", is_eligible=False,
+                "NOM-002",
+                "4100",
+                "2.5",
+                "2024-06-21",
+                "31/08/2024",
+                status="written_off",
+                is_eligible=False,
             )
         )
         assert result.is_eligible is False

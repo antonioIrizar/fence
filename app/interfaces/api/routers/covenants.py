@@ -176,9 +176,10 @@ def get_covenant_report(
     use_case: GetCovenantReportUseCase = Depends(get_report_use_case),
 ) -> CovenantReportResponse:
     query = GetCovenantReportQuery(facility_id=facility_id, report_id=report_id)
-    report = use_case.execute(query)
-    if report is None:
-        raise HTTPException(status_code=404, detail="Report not found")
+    try:
+        report = use_case.execute(query)
+    except CovenantCalculationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return _to_response(report)
 
 

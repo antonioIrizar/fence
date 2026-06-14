@@ -156,13 +156,18 @@ class TestPayEarlyCalculator:
         # effective_rate = numerator/denominator = fee_yield_pct ≈ 0.03
         result = self.calc.process_asset(
             self._make_raw(
-                "PE-001", "3400", "8500", "1.75",
-                "2025-06-15T09:00:00+00:00", "2026-03-15",
+                "PE-001",
+                "3400",
+                "8500",
+                "1.75",
+                "2025-06-15T09:00:00+00:00",
+                "2026-03-15",
             )
         )
         assert result.is_eligible is True
         assert result.denominator == Decimal("3400")
         from decimal import ROUND_HALF_UP
+
         effective_rate = (result.numerator / result.denominator).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
@@ -171,8 +176,13 @@ class TestPayEarlyCalculator:
     def test_ineligible_asset_has_no_contribution(self) -> None:
         result = self.calc.process_asset(
             self._make_raw(
-                "PE-002", "7111", "7111", "2.92",
-                "2023-07-22T13:52:25+00:00", "2025-07-28", status="defaulted"
+                "PE-002",
+                "7111",
+                "7111",
+                "2.92",
+                "2023-07-22T13:52:25+00:00",
+                "2025-07-28",
+                status="defaulted",
             )
         )
         assert result.is_eligible is False
