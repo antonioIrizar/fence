@@ -6,6 +6,13 @@ from app.domain.facility.interfaces import FacilityCalculator
 
 
 class _FakeCalculator(FacilityCalculator):
+    @property
+    def threshold(self):  # type: ignore[override]
+        return __import__("decimal").Decimal("22.00")
+
+    def process_asset(self, raw):  # type: ignore[override]
+        raise NotImplementedError
+
     def calculate(  # type: ignore[override]
         self, raw_assets, facility_id, correlation_id
     ):

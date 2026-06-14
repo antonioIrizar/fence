@@ -11,19 +11,27 @@ from app.application.use_cases.get_covenant_report import (
     GetCovenantReportUseCase,
     ListCovenantReportsUseCase,
 )
+from app.application.use_cases.get_facility_state import GetFacilityStateUseCase
 from app.application.use_cases.ingest_assets import IngestAssetsUseCase
 from app.domain.covenant.entities import CovenantReport
 from app.interfaces.api.dependencies import (
     get_calculate_use_case,
+    get_facility_state_use_case,
     get_ingest_use_case,
     get_list_use_case,
     get_report_use_case,
 )
-from app.interfaces.api.schemas.asset import IngestAssetsRequest, IngestAssetsResponse
+from app.interfaces.api.schemas.asset import (
+    CovenantStateResponse,
+    ExcludedAssetResponse,
+    FacilityStateResponse,
+    FacilityStateSummary,
+    IngestAssetsRequest,
+    IngestAssetsResponse,
+)
 from app.interfaces.api.schemas.request import CalculateCovenantRequest
 from app.interfaces.api.schemas.response import (
     CovenantReportResponse,
-    ExcludedAssetResponse,
     ReportSummary,
 )
 
@@ -97,6 +105,31 @@ def ingest_assets(
         duplicates=result.duplicates,
         saved_count=result.saved_count,
         duplicate_count=result.duplicate_count,
+        covenant_state=CovenantStateResponse.from_domain(result.covenant_state),
+    )
+
+
+@router.get("/{facility_id}/state", response_model=FacilityStateResponse)
+def get_facility_state(
+    facility_id: str,
+    use_case: GetFacilityStateUseCase = Depends(get_facility_state_use_case),
+) -> FacilityStateResponse:
+    result = use_case.execute(facility_id)
+    return FacilityStateResponse(
+        covenant_state=CovenantStateResponse.from_domain(result.covenant_state),
+        summary=FacilityStateSummary(
+            total=result.total_assets,
+            included=len(result.included_assets),
+            excluded=len(result.excluded_assets),
+        ),
+        included_assets=result.included_assets,
+        excluded_assets=[
+            ExcludedAssetResponse(
+                external_id=e.external_id,
+                reasons=e.reasons,
+            )
+            for e in result.excluded_assets
+        ],
     )
 
 

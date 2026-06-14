@@ -3,6 +3,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import uuid4
 
+from app.domain.asset.base import BaseAsset
 from app.domain.asset.educa import EducaAsset
 from app.domain.covenant.entities import CovenantReport, CovenantStatus, ExcludedAsset
 from app.domain.errors import CovenantCalculationError, InvalidPortfolioData
@@ -11,7 +12,7 @@ from app.domain.facility.interfaces import (
     FacilityCalculator,
     FacilityMapper,
 )
-from app.domain.asset.base import BaseAsset
+from app.domain.facility.processing import AssetProcessingResult
 
 _THRESHOLD = Decimal("22.00")
 _TWO_PLACES = Decimal("0.01")
@@ -89,6 +90,32 @@ class EducaCalculator(FacilityCalculator):
         self._mapper = EducaMapper()
         self._policy = EducaEligibilityPolicy()
 
+    @property
+    def threshold(self) -> Decimal:
+        return _THRESHOLD
+
+    def process_asset(self, raw: dict[str, Any]) -> AssetProcessingResult:
+        asset = self._mapper.map(raw)
+        is_eligible, reasons = self._policy.check(asset)
+        if is_eligible:
+            assert asset.interest_rate_percentage is not None
+            numerator = asset.outstanding_amount * asset.interest_rate_percentage
+            denominator = asset.outstanding_amount
+            return AssetProcessingResult(
+                asset=asset,
+                is_eligible=True,
+                exclusion_reasons=[],
+                numerator=numerator,
+                denominator=denominator,
+            )
+        return AssetProcessingResult(
+            asset=asset,
+            is_eligible=False,
+            exclusion_reasons=reasons,
+            numerator=None,
+            denominator=None,
+        )
+
     def calculate(
         self,
         raw_assets: list[dict[str, Any]],
@@ -101,18 +128,19 @@ class EducaCalculator(FacilityCalculator):
         total_outstanding = Decimal("0")
 
         for raw in raw_assets:
-            asset = self._mapper.map(raw)
-            eligible, reasons = self._policy.check(asset)
-            if eligible:
-                included.append(asset.external_id)
-                assert asset.interest_rate_percentage is not None
-                weighted_sum += (
-                    asset.outstanding_amount * asset.interest_rate_percentage
-                )
-                total_outstanding += asset.outstanding_amount
+            result = self.process_asset(raw)
+            if result.is_eligible:
+                included.append(result.asset.external_id)
+                assert result.numerator is not None
+                assert result.denominator is not None
+                weighted_sum += result.numerator
+                total_outstanding += result.denominator
             else:
                 excluded.append(
-                    ExcludedAsset(external_id=asset.external_id, reasons=reasons)
+                    ExcludedAsset(
+                        external_id=result.asset.external_id,
+                        reasons=result.exclusion_reasons,
+                    )
                 )
 
         if total_outstanding == Decimal("0"):

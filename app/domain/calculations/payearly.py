@@ -12,10 +12,23 @@ from app.domain.facility.interfaces import (
     FacilityCalculator,
     FacilityMapper,
 )
+from app.domain.facility.processing import AssetProcessingResult
 
 _THRESHOLD = Decimal("3.00")
 _TWO_PLACES = Decimal("0.01")
 _365 = Decimal("365")
+
+
+def _fee_yield_pct(asset: PayEarlyAsset) -> Decimal:
+    """
+    Annualised fee yield as a percentage.
+    fee_yield = (total_fee / total_principal) × (365 / tenor_days) × 100
+    """
+    tenor_days = Decimal(str((asset.due_date - asset.created_at.date()).days))
+    fee_yield = (asset.total_fee_amount / asset.total_principal_amount) * (
+        _365 / tenor_days
+    )
+    return fee_yield * Decimal("100")
 
 
 class PayEarlyEligibilityPolicy(EligibilityPolicy):
@@ -99,6 +112,33 @@ class PayEarlyCalculator(FacilityCalculator):
         self._mapper = PayEarlyMapper()
         self._policy = PayEarlyEligibilityPolicy()
 
+    @property
+    def threshold(self) -> Decimal:
+        return _THRESHOLD
+
+    def process_asset(self, raw: dict[str, Any]) -> AssetProcessingResult:
+        asset = self._mapper.map(raw)
+        is_eligible, reasons = self._policy.check(asset)
+        if is_eligible:
+            assert isinstance(asset, PayEarlyAsset)
+            fee_yield_pct = _fee_yield_pct(asset)
+            numerator = asset.outstanding_principal_amount * fee_yield_pct
+            denominator = asset.outstanding_principal_amount
+            return AssetProcessingResult(
+                asset=asset,
+                is_eligible=True,
+                exclusion_reasons=[],
+                numerator=numerator,
+                denominator=denominator,
+            )
+        return AssetProcessingResult(
+            asset=asset,
+            is_eligible=False,
+            exclusion_reasons=reasons,
+            numerator=None,
+            denominator=None,
+        )
+
     def calculate(
         self,
         raw_assets: list[dict[str, Any]],
@@ -111,23 +151,19 @@ class PayEarlyCalculator(FacilityCalculator):
         total_outstanding = Decimal("0")
 
         for raw in raw_assets:
-            asset = self._mapper.map(raw)
-            eligible, reasons = self._policy.check(asset)
-            if eligible:
-                tenor_days = Decimal(
-                    str((asset.due_date - asset.created_at.date()).days)
-                )
-                fee_yield = (asset.total_fee_amount / asset.total_principal_amount) * (
-                    _365 / tenor_days
-                )
-                # Convert to percentage
-                fee_yield_pct = fee_yield * Decimal("100")
-                included.append(asset.external_id)
-                weighted_sum += asset.outstanding_principal_amount * fee_yield_pct
-                total_outstanding += asset.outstanding_principal_amount
+            result = self.process_asset(raw)
+            if result.is_eligible:
+                included.append(result.asset.external_id)
+                assert result.numerator is not None
+                assert result.denominator is not None
+                weighted_sum += result.numerator
+                total_outstanding += result.denominator
             else:
                 excluded.append(
-                    ExcludedAsset(external_id=asset.external_id, reasons=reasons)
+                    ExcludedAsset(
+                        external_id=result.asset.external_id,
+                        reasons=result.exclusion_reasons,
+                    )
                 )
 
         if total_outstanding == Decimal("0"):

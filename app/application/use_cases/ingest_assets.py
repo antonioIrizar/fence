@@ -1,89 +1,79 @@
-from datetime import datetime, timezone
-from decimal import Decimal
-from typing import Any
-from uuid import uuid4
-
 from pydantic import BaseModel
 
 from app.application.commands.ingest_assets import IngestAssetsCommand
-from app.domain.asset.record import AssetRecord
-from app.domain.asset.repository import AssetRepository
-from app.domain.errors import InvalidPortfolioData
+from app.application.services.asset_ingestion_service import AssetIngestionService
+from app.application.services.covenant_state_service import (
+    initial_state,
+    update_covenant_state,
+)
+from app.domain.covenant.state import FacilityCovenantState
+from app.domain.covenant.state_repository import FacilityCovenantStateRepository
 
 
 class IngestAssetsResult(BaseModel):
     """
-    Result of an asset ingestion operation.
+    Result of an asset ingestion batch.
 
-    - saved: external_ids of newly persisted assets
-    - duplicates: external_ids that already existed for this facility
+    - saved: external_ids of newly persisted assets (new entries only)
+    - duplicates: external_ids that already existed for this facility (skipped)
+    - covenant_state: the facility's updated pre-computed covenant state
     """
 
     saved: list[str]
     duplicates: list[str]
     saved_count: int
     duplicate_count: int
-
-
-def _extract_record(facility_id: str, raw: dict[str, Any]) -> AssetRecord:
-    try:
-        external_id = str(raw["external_id"])
-        status = str(raw.get("status", ""))
-        amount = Decimal(str(raw.get("amount", "0")))
-        is_eligible = bool(raw.get("is_eligible", False))
-    except KeyError as exc:
-        raise InvalidPortfolioData(f"Missing required field: {exc}") from exc
-    except Exception as exc:
-        raise InvalidPortfolioData(f"Invalid asset data: {exc}") from exc
-
-    return AssetRecord(
-        id=uuid4(),
-        facility_id=facility_id,
-        external_id=external_id,
-        status=status,
-        amount=amount,
-        is_eligible=is_eligible,
-        raw=raw,
-        ingested_at=datetime.now(timezone.utc),
-    )
+    covenant_state: FacilityCovenantState
 
 
 class IngestAssetsUseCase:
     """
-    Business context: Accepts a batch of raw asset dicts for a facility,
-    deduplicates against already-stored records (by facility_id + external_id),
-    persists new assets, and reports which were saved vs skipped.
+    Business context: Orchestrates asset ingestion and incremental covenant
+    state update for a facility.
+
+    Delegates:
+    - Asset processing, deduplication, and persistence → AssetIngestionService
+    - Covenant state locking, accumulation, and persistence → update_covenant_state
 
     Assumptions:
-    - Each raw asset must contain an `external_id` field.
-    - Duplicates are silently discarded; callers are notified via the result.
+    - Empty asset lists return the current covenant state without acquiring a lock.
+    - Only new AND eligible assets contribute to the covenant state delta.
     """
 
-    def __init__(self, repository: AssetRepository) -> None:
-        self._repository = repository
+    def __init__(
+        self,
+        ingestion_service: AssetIngestionService,
+        state_repository: FacilityCovenantStateRepository,
+    ) -> None:
+        self._ingestion_service = ingestion_service
+        self._state_repository = state_repository
 
     def execute(self, command: IngestAssetsCommand) -> IngestAssetsResult:
-        records = [_extract_record(command.facility_id, raw) for raw in command.assets]
-
-        if not records:
+        if not command.assets:
+            state = self._state_repository.get(command.facility_id) or initial_state(
+                command.facility_id
+            )
             return IngestAssetsResult(
-                saved=[], duplicates=[], saved_count=0, duplicate_count=0
+                saved=[],
+                duplicates=[],
+                saved_count=0,
+                duplicate_count=0,
+                covenant_state=state,
             )
 
-        all_ids = [r.external_id for r in records]
-        existing = self._repository.find_existing_external_ids(
-            command.facility_id, all_ids
+        batch = self._ingestion_service.ingest(command.facility_id, command.assets)
+
+        state = update_covenant_state(
+            repository=self._state_repository,
+            facility_id=command.facility_id,
+            contributions=batch.eligible_contributions,
+            threshold=batch.facility_threshold,
         )
 
-        new_records = [r for r in records if r.external_id not in existing]
-        duplicate_ids = [r.external_id for r in records if r.external_id in existing]
-
-        if new_records:
-            self._repository.save_batch(new_records)
-
         return IngestAssetsResult(
-            saved=[r.external_id for r in new_records],
-            duplicates=duplicate_ids,
-            saved_count=len(new_records),
-            duplicate_count=len(duplicate_ids),
+            saved=batch.saved_ids,
+            duplicates=batch.duplicate_ids,
+            saved_count=len(batch.saved_ids),
+            duplicate_count=len(batch.duplicate_ids),
+            covenant_state=state,
         )

@@ -10,9 +10,12 @@ from app.application.use_cases.get_covenant_report import (
     GetCovenantReportUseCase,
     ListCovenantReportsUseCase,
 )
+from app.application.services.asset_ingestion_service import AssetIngestionService
+from app.application.use_cases.get_facility_state import GetFacilityStateUseCase
 from app.application.use_cases.ingest_assets import IngestAssetsUseCase
 from app.domain.asset.repository import AssetRepository
 from app.domain.covenant.repository import CovenantReportRepository
+from app.domain.covenant.state_repository import FacilityCovenantStateRepository
 from app.domain.publishers.interface import Publisher
 from app.infrastructure.database.session import get_session
 from app.infrastructure.publishers.database_publisher import DatabasePublisher
@@ -24,6 +27,9 @@ from app.infrastructure.repositories.postgres_asset_repository import (
 )
 from app.infrastructure.repositories.postgres_covenant_report_repository import (
     PostgresCovenantReportRepository,
+)
+from app.infrastructure.repositories.postgres_facility_covenant_state_repository import (  # noqa: E501
+    PostgresFacilityCovenantStateRepository,
 )
 from app.settings import settings
 
@@ -87,7 +93,41 @@ def get_asset_repository(
     return PostgresAssetRepository(session)
 
 
-def get_ingest_use_case(
+def get_covenant_state_repository(
+    session: Session = Depends(get_db_session),
+) -> FacilityCovenantStateRepository:
+    return PostgresFacilityCovenantStateRepository(session)
+
+
+def get_asset_ingestion_service(
     asset_repository: AssetRepository = Depends(get_asset_repository),
+    registry: FacilityRegistry = Depends(get_registry),
+) -> AssetIngestionService:
+    return AssetIngestionService(
+        asset_repository=asset_repository,
+        registry=registry,
+    )
+
+
+def get_facility_state_use_case(
+    state_repository: FacilityCovenantStateRepository = Depends(
+        get_covenant_state_repository
+    ),
+    asset_repository: AssetRepository = Depends(get_asset_repository),
+) -> GetFacilityStateUseCase:
+    return GetFacilityStateUseCase(
+        state_repository=state_repository,
+        asset_repository=asset_repository,
+    )
+
+
+def get_ingest_use_case(
+    ingestion_service: AssetIngestionService = Depends(get_asset_ingestion_service),
+    state_repository: FacilityCovenantStateRepository = Depends(
+        get_covenant_state_repository
+    ),
 ) -> IngestAssetsUseCase:
-    return IngestAssetsUseCase(repository=asset_repository)
+    return IngestAssetsUseCase(
+        ingestion_service=ingestion_service,
+        state_repository=state_repository,
+    )

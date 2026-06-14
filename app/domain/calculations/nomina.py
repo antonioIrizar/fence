@@ -12,6 +12,7 @@ from app.domain.facility.interfaces import (
     FacilityCalculator,
     FacilityMapper,
 )
+from app.domain.facility.processing import AssetProcessingResult
 
 _THRESHOLD = Decimal("5.00")
 _TWO_PLACES = Decimal("0.01")
@@ -36,6 +37,11 @@ def _repayment_months(origination_date: date, maturity_str: str) -> Decimal:
     if months < 1:
         months = 1
     return Decimal(str(months))
+
+
+def _annualized_fee(asset: NominaAsset) -> Decimal:
+    months = _repayment_months(asset.origination_date, asset.maturity_date)
+    return asset.fee_percentage * (_12 / months)
 
 
 class NominaEligibilityPolicy(EligibilityPolicy):
@@ -111,6 +117,33 @@ class NominaCalculator(FacilityCalculator):
         self._mapper = NominaMapper()
         self._policy = NominaEligibilityPolicy()
 
+    @property
+    def threshold(self) -> Decimal:
+        return _THRESHOLD
+
+    def process_asset(self, raw: dict[str, Any]) -> AssetProcessingResult:
+        asset = self._mapper.map(raw)
+        is_eligible, reasons = self._policy.check(asset)
+        if is_eligible:
+            assert isinstance(asset, NominaAsset)
+            ann_fee = _annualized_fee(asset)
+            numerator = asset.outstanding_amount * ann_fee
+            denominator = asset.outstanding_amount
+            return AssetProcessingResult(
+                asset=asset,
+                is_eligible=True,
+                exclusion_reasons=[],
+                numerator=numerator,
+                denominator=denominator,
+            )
+        return AssetProcessingResult(
+            asset=asset,
+            is_eligible=False,
+            exclusion_reasons=reasons,
+            numerator=None,
+            denominator=None,
+        )
+
     def calculate(
         self,
         raw_assets: list[dict[str, Any]],
@@ -123,17 +156,19 @@ class NominaCalculator(FacilityCalculator):
         total_outstanding = Decimal("0")
 
         for raw in raw_assets:
-            asset = self._mapper.map(raw)
-            eligible, reasons = self._policy.check(asset)
-            if eligible:
-                months = _repayment_months(asset.origination_date, asset.maturity_date)
-                annualized_fee = asset.fee_percentage * (_12 / months)
-                included.append(asset.external_id)
-                weighted_sum += asset.outstanding_amount * annualized_fee
-                total_outstanding += asset.outstanding_amount
+            result = self.process_asset(raw)
+            if result.is_eligible:
+                included.append(result.asset.external_id)
+                assert result.numerator is not None
+                assert result.denominator is not None
+                weighted_sum += result.numerator
+                total_outstanding += result.denominator
             else:
                 excluded.append(
-                    ExcludedAsset(external_id=asset.external_id, reasons=reasons)
+                    ExcludedAsset(
+                        external_id=result.asset.external_id,
+                        reasons=result.exclusion_reasons,
+                    )
                 )
 
         if total_outstanding == Decimal("0"):

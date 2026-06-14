@@ -1,5 +1,6 @@
 from datetime import timezone
 from decimal import Decimal
+from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,10 @@ class PostgresAssetRepository(AssetRepository):
                     status=record.status,
                     amount=record.amount,
                     is_eligible=record.is_eligible,
+                    is_eligible_asset=record.is_eligible_asset,
+                    exclusion_reasons=record.exclusion_reasons,
+                    contribution_numerator=record.contribution_numerator,
+                    contribution_denominator=record.contribution_denominator,
                     raw=record.raw,
                     ingested_at=record.ingested_at,
                 )
@@ -58,6 +63,21 @@ class PostgresAssetRepository(AssetRepository):
 
 
 def _to_domain(model: AssetModel) -> AssetRecord:
+    ingested_at = model.ingested_at
+    if ingested_at.tzinfo is None:
+        ingested_at = ingested_at.replace(tzinfo=timezone.utc)
+
+    num = (
+        Decimal(str(model.contribution_numerator))
+        if model.contribution_numerator is not None
+        else None
+    )
+    den = (
+        Decimal(str(model.contribution_denominator))
+        if model.contribution_denominator is not None
+        else None
+    )
+
     return AssetRecord(
         id=model.id,
         facility_id=model.facility_id,
@@ -65,10 +85,14 @@ def _to_domain(model: AssetModel) -> AssetRecord:
         status=model.status,
         amount=Decimal(str(model.amount)),
         is_eligible=bool(model.is_eligible),
+        is_eligible_asset=bool(model.is_eligible_asset),
+        exclusion_reasons=list(model.exclusion_reasons or []),
+        contribution_numerator=num,
+        contribution_denominator=den,
         raw=model.raw,
-        ingested_at=(
-            model.ingested_at
-            if model.ingested_at.tzinfo is not None
-            else model.ingested_at.replace(tzinfo=timezone.utc)
-        ),
+        ingested_at=ingested_at,
     )
+
+
+def _nullable_decimal(value: Optional[Decimal]) -> Optional[Decimal]:
+    return value
